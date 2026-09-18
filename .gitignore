@@ -1,0 +1,6 @@
+packs/
+build/secret.json
+build/geocodes.json
+build/geocode_misses.json
+build/*.log
+node_modules/
