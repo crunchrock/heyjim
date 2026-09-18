@@ -189,7 +189,8 @@ for (const s of bundle.sources) if (usedSrc.has(s.id)) sources[s.id] = [s.title 
 
 const data = {
   v: bundle.manifest.version, researched: bundle.manifest.research_date, built: new Date().toISOString(),
-  packs: bundle.packs, profile: bundle.profile, route: bundle.manifest.route_visit_sequence, zones, pois, ovn, camp, mail, rec, food, dd, sources,
+  packs: bundle.packs, profile: bundle.profile,
+  sync: secret.sync_token ? { repo: secret.sync_repo || 'crunchrock/heyjim-data', path: 'state.json', token: secret.sync_token } : null, route: bundle.manifest.route_visit_sequence, zones, pois, ovn, camp, mail, rec, food, dd, sources,
 };
 
 // ---- encrypt

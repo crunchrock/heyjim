@@ -44,8 +44,63 @@ const DEFAULT_STATE = {
 let S = Object.assign(structuredClone(DEFAULT_STATE), store.get('state', {}));
 S.settings = Object.assign({}, DEFAULT_STATE.settings, S.settings);
 let saveT;
-function save() { clearTimeout(saveT); saveT = setTimeout(() => store.set('state', S), 120); }
+function save() { S.updatedAt = Date.now(); clearTimeout(saveT); saveT = setTimeout(() => { store.set('state', S); syncSoon(); }, 120); }
 function saveNow() { clearTimeout(saveT); store.set('state', S); }
+
+// ---------- sync: user state <-> private GitHub repo (contents API). Local-first; the repo is the backup + source for rebuilds.
+const sync = { sha: null, busy: false, t: null, last: store.get('syncLast', 0), err: null, dirty: false };
+const SYNC_SKIP = ['loc'];   // don't commit GPS pings
+const u8b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
+const toB64 = str => u8b64(new TextEncoder().encode(str));
+const fromB64 = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\s/g, '')), c => c.charCodeAt(0)));
+function ghApi(method, body) {
+  const s = D?.sync;
+  return fetch(`https://api.github.com/repos/${s.repo}/contents/${s.path}`, {
+    method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined,
+    headers: { Authorization: `Bearer ${s.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+}
+function syncSoon(ms = 15000) { if (!D?.sync) return; sync.dirty = true; clearTimeout(sync.t); sync.t = setTimeout(syncPush, ms); }
+// append-only lists merge by id / time so two devices (or a stale phone) never lose notes, logs or nights
+function mergeState(remote) {
+  const byKey = (a, b, k) => { const m = new Map(); for (const x of [...(a || []), ...(b || [])]) m.set(k(x), x); return [...m.values()].sort((x, y) => (x.t || 0) - (y.t || 0)); };
+  const newer = (remote.updatedAt || 0) > (S.updatedAt || 0) ? remote : S;
+  const out = { ...structuredClone(DEFAULT_STATE), ...newer, loc: S.loc };
+  out.obs = byKey(S.obs, remote.obs, x => x.id);
+  out.log = byKey(S.log, remote.log, x => x.id);
+  out.nights = byKey(S.nights, remote.nights, x => x.poi + '|' + (x.day || x.t));
+  out.wishes = byKey(S.wishes, remote.wishes, x => x.area + x.t);
+  out.days = { ...(newer === S ? remote.days : S.days), ...newer.days };
+  return out;
+}
+async function syncPull() {
+  if (!D?.sync) return false;
+  try {
+    const r = await ghApi('GET');
+    if (!r.ok) throw new Error('pull ' + r.status);
+    const j = await r.json();
+    sync.sha = j.sha;
+    const remote = JSON.parse(fromB64(j.content || '') || '{}');
+    if (remote.updatedAt && remote.updatedAt !== S.updatedAt) { S = mergeState(remote); S.settings = Object.assign({}, DEFAULT_STATE.settings, S.settings); store.set('state', S); return true; }
+    sync.err = null;
+  } catch (e) { sync.err = e.message; }
+  return false;
+}
+async function syncPush() {
+  if (!D?.sync || sync.busy) return;
+  sync.busy = true; clearTimeout(sync.t);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const body = JSON.stringify(S, (k, v) => (SYNC_SKIP.includes(k) ? undefined : v), 1);
+      if (!sync.sha) { const g = await ghApi('GET'); if (g.ok) sync.sha = (await g.json()).sha; }
+      const r = await ghApi('PUT', { message: `sync ${new Date().toISOString()}`, content: toB64(body + '\n'), sha: sync.sha || undefined });
+      if (r.ok) { sync.sha = (await r.json()).content.sha; sync.last = Date.now(); store.set('syncLast', sync.last); sync.err = null; sync.dirty = false; break; }
+      if (r.status === 409 || r.status === 422) { sync.sha = null; await syncPull(); continue; }   // changed elsewhere: merge, retry
+      throw new Error('push ' + r.status);
+    }
+  } catch (e) { sync.err = navigator.onLine === false ? 'offline, will retry' : e.message; syncSoon(60000); }
+  finally { sync.busy = false; }
+}
 
 // ---------- crypto (data.enc = "HJ1" | ver | iter u32 | salt16 | iv12 | AES-GCM(gzip(json)))
 const b64 = { enc: u8 => btoa(String.fromCharCode(...u8)), dec: s => Uint8Array.from(atob(s), c => c.charCodeAt(0)) };

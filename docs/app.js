@@ -63,6 +63,7 @@ function showLock(msg, buf) {
 }
 function start(data) {
   indexData(data); pruneDays(); migrate(); sel = today();
+  syncPull().then(changed => { if (changed) { pruneDays(); render(); } syncPush(); });
   if (!S.settings.name && D.profile?.name) S.settings.name = D.profile.name;
   $('#lock').hidden = true; $('#app').hidden = false;
   render();
@@ -70,7 +71,8 @@ function start(data) {
   refreshWx();
   setInterval(() => { applyTheme(); if (tab === 'today' && !sheetStack.length) render(); }, MIN);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return saveNow();
+    if (document.hidden) { saveNow(); if (sync.dirty) syncPush(); return; }
+    syncPull().then(changed => { if (changed && !sheetStack.length) render(); });
     if (sel < today()) sel = today();
     locate().then(() => { if (!sheetStack.length) render(); });
     refreshWx();
@@ -1042,8 +1044,12 @@ function vWeek() {
     <div><span class="lbl">Directions open in</span>${seg('maps', [['gapp', 'Google Maps app'], ['web', 'Google web'], ['apple', 'Apple Maps']])}</div>
     <div>${tog('club', 'Planet Fitness Black Card (any club)')}${tog('tent', 'Tent on board (show tent camps)')}${tog('hotel', 'Hotel nights OK (paid lodging)')}</div>
     <div><span class="lbl">Name for General Delivery mail</span><input class="field" data-c="name" value="${esc(set.name)}" placeholder="FIRST LAST" autocapitalize="characters"></div></div>
-    <h2>Backup</h2><div class="row wrap"><button class="btn" data-a="export">Export my data</button><label class="btn">Import<input type="file" accept="application/json" data-c="import" hidden></label><button class="btn" data-a="lock" style="color:var(--bad)">Lock app</button></div>
-    <p class="faint tiny" style="margin-top:14px">Your plans, notes and logs live only on this phone. Export now and then. Data v${esc(D.v)} (${esc(D.researched)}).</p>`;
+    <h2>Sync</h2><div class="card"><div class="row"><div class="grow"><b>${D.sync ? (sync.err ? '⚠️ Not synced' : '✓ Saved to GitHub') : 'Sync not set up'}</b>
+      <div class="sub">${D.sync ? (sync.err ? esc(sync.err) + ' · ' : '') + (sync.last ? 'Last saved ' + fmtAgo(sync.last) : 'Not saved yet') + ' · ' + esc(D.sync.repo) : 'Plans and notes are only on this phone.'}</div></div>
+      ${D.sync ? '<button class="btn sm" data-a="syncNow">Sync now</button>' : ''}</div></div>
+    <p class="note">Plans, notes, recon results, logs and settings save automatically a few seconds after each change.</p>
+    <div class="row wrap"><button class="btn" data-a="lock" style="color:var(--bad)">Lock app</button></div>
+    <p class="faint tiny" style="margin-top:14px">Data v${esc(D.v)} (${esc(D.researched)}) · ${D.pois.length} places.</p>`;
 }
 A.setOpt = ({ k, v }) => { S.settings[k] = v; save(); applyTheme(); render(); };
 C.tog = el => { S.settings[el.dataset.k] = el.checked; save(); };
@@ -1054,19 +1060,7 @@ A.delLog = ({ id }) => { const i = S.log.findIndex(e => e.id === id), e = S.log[
 A.logTime = () => openSheet(() => sheetHead('Log time', 'Work you did outside a block') + `<div class="grid2"><div><label class="lbl">What</label><select class="field" id="ltK"><option value="dev">Game dev</option><option value="water">Water time</option><option value="car">Car work</option><option value="gym">Gym</option></select></div>
   <div><label class="lbl">Hours</label><input class="field" id="ltH" type="number" inputmode="decimal" value="2"></div></div><button class="btn big primary" data-a="saveTime" style="margin-top:12px">Save</button>`);
 A.saveTime = () => { const k = $('#ltK').value, h = parseFloat($('#ltH').value) || 0; if (!h) return; logEntry(k, h * 60); if (k === 'gym') { S.last.shower = Date.now(); S.workout = (S.workout + 1) % 5; } closeSheet(true); toast('Logged'); };
-A.export = () => {
-  const blob = new Blob([JSON.stringify(S)], { type: 'application/json' });
-  const f = new File([blob], `heyjim-backup-${today()}.json`, { type: 'application/json' });
-  if (navigator.canShare?.({ files: [f] })) navigator.share({ files: [f] }).catch(() => {});
-  else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = f.name; a.click(); }
-};
-C.import = async el => {
-  try {
-    const j = JSON.parse(await el.files[0].text());
-    if (!j.settings || !j.days) throw 0;
-    S = Object.assign(structuredClone(DEFAULT_STATE), j); saveNow(); render(); toast('Backup restored');
-  } catch { toast('That file is not a Hey Jim backup'); }
-};
+A.syncNow = async () => { toast('Syncing…'); await syncPull(); await syncPush(); render(); toast(sync.err ? 'Sync failed: ' + sync.err : 'Saved to GitHub'); };
 A.lock = () => { store.del('key'); location.reload(); };
 
 boot();
