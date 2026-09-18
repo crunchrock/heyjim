@@ -225,7 +225,7 @@ function fit(p, ts, dur) {
   if (st.k === '24h') return { k: 'ok', txt: 'Open 24h' };
   if (st.k === 'unknown') return { k: 'unk', txt: st.txt };
   if (st.k === 'closed') return { k: 'closed', txt: st.txt };
-  if (dur && st.left < Math.min(dur, 600)) return { k: 'short', txt: `Closes after ${fmtDur(st.left)}`, cover: st.left / dur };
+  if (dur && st.left < Math.min(dur, 600) - 15) return { k: 'short', txt: `Closes after ${fmtDur(st.left)}`, cover: st.left / dur };
   return { k: 'ok', txt: st.txt };
 }
 
@@ -256,10 +256,12 @@ function sketchChip(p) {
   const o = p._ov;
   if (!o) return null;
   if (o.st === 'prohibited') return ['Prohibited overnight', 'bad'];
-  if (o.pr === 'extra_friction' || o.st === 'mixed_reports') return ['Sketchy', 'warn'];
-  if (o.gray) return ['Gray area', 'warn'];
+  if (o.st === 'mixed_reports') return ['Mixed reports', 'warn'];
+  if (o.pr === 'extra_friction') return ['Extra friction', 'warn'];
   return null;
 }
+const LOT_TYPE = { walmart: 'Walmart lot', planet_fitness: 'PF lot', hotel_cluster: 'Hotel lot', cracker_barrel: 'Cracker Barrel', truck_stop: 'Truck stop', public_lot: 'Public lot' };
+const lotChip = p => (p._ov ? [LOT_TYPE[p._ov.ty] || 'Lot', ''] : p.caps.tent_camp ? ['Camping', 'ok'] : p.caps.paid_lodging ? ['Paid room', ''] : null);
 function lastNight(id) { let t = 0; for (const n of S.nights) if (n.poi === id && n.t > t) t = n.t; return t; }
 function wfChips(p) {
   const w = p.wf; if (!w) return [];
@@ -386,16 +388,16 @@ const WORKOUTS = [
 // Day types. Rules: water time every day, no more than ~3h at one indoor venue, dev work mixed across
 // water / café / Panera-library / car office. "type:minutes@HH:MM" pins a start time (e.g. DoorDash peak).
 const TEMPLATES = [
-  { id: 'balanced', n: 'Balanced creative day', d: 'Water work → café → food → Panera → PF → car office', b: ['water_work:120', 'cafe:150', 'meal:45', 'panera:150', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'max', n: 'Big game day', d: 'Water break → café → food → water work → Panera → PF → car office', b: ['water_s:60', 'cafe:150', 'meal:45', 'water_work:120', 'panera:180', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'nomad', n: 'Beach nomad', d: 'Half a day working on the water → food → Panera → PF', b: ['water_l:240', 'meal:45', 'panera:150', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'cash', n: 'Cash day', d: 'Water work → café → DoorDash 5–8 → PF → car office', b: ['water_work:120', 'cafe:150', 'meal:45', 'dash:180@17:00', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'lunchdash', n: 'Lunch dash day', d: 'DoorDash 11–2 → food → water work → Panera → PF', b: ['dash:180@11:00', 'meal:45', 'water_work:120', 'panera:150', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'library', n: 'Library day', d: 'Water work → library → food → water break → PF → car office', b: ['water_work:120', 'library:180', 'meal:45', 'water_s:75', 'gym', 'sleep', 'carofc:120'] },
+  { id: 'balanced', n: 'Balanced creative day', d: 'Water work → café → food → Panera → PF → car office', b: ['water_work:120', 'cafe:150', 'meal:45', 'panera:150', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'max', n: 'Big game day', d: 'Water break → café → food → water work → Panera → PF → car office', b: ['water_s:60', 'cafe:150', 'meal:45', 'water_work:120', 'panera:180', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'nomad', n: 'Beach nomad', d: 'Half a day working on the water → food → Panera → PF', b: ['water_l:240', 'meal:45', 'panera:150', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'cash', n: 'Cash day', d: 'Water work → café → DoorDash 5–8 → PF → car office', b: ['water_work:120', 'cafe:150', 'meal:45', 'dash:180@17:00', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'lunchdash', n: 'Lunch dash day', d: 'DoorDash 11–2 → food → water work → Panera → PF', b: ['dash:180@11:00', 'meal:45', 'water_work:120', 'panera:150', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'library', n: 'Library day', d: 'Water work → library → food → water break → PF → car office', b: ['water_work:120', 'library:180', 'meal:45', 'water_s:75', 'gym', 'carofc:120', 'sleep'] },
   { id: 'joy', n: 'Joy day', d: 'Long water → explore → good meal → café → PF', b: ['water_l:180', 'fun:120', 'meal:60', 'cafe:120', 'gym', 'sleep'] },
-  { id: 'grill', n: 'Grill night', d: 'Water work → café → Panera → grill dinner by the water → PF', b: ['water_work:120', 'cafe:150', 'panera:120', 'grill:90', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'move', n: 'Moving day', d: 'Café → travel → water work in the new zone → PF', b: ['water_s:60', 'cafe:150', 'travel', 'water_work:120', 'gym', 'sleep', 'carofc:120'] },
-  { id: 'car', n: 'Car day', d: '2h car work → water work → food → café → PF', b: ['car:120', 'water_work:120', 'meal:45', 'cafe:120', 'gym', 'sleep', 'carofc:120'] },
+  { id: 'grill', n: 'Grill night', d: 'Water work → café → Panera → grill dinner by the water → PF', b: ['water_work:120', 'cafe:150', 'panera:120', 'grill:90', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'move', n: 'Moving day', d: 'Café → travel → water work in the new zone → PF', b: ['water_s:60', 'cafe:150', 'travel', 'water_work:120', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'car', n: 'Car day', d: '2h car work → water work → food → café → PF', b: ['car:120', 'water_work:120', 'meal:45', 'cafe:120', 'gym', 'carofc:120', 'sleep'] },
   { id: 'tired', n: 'Easy reset', d: 'PF + shower → good food → water break → early night', b: ['gym', 'meal:60', 'water_s:90', 'sleep'] },
   { id: 'blank', n: 'Blank', d: 'Start empty and add blocks', b: ['sleep'] },
 ];
@@ -454,6 +456,10 @@ function nextZone(dir, from = here()) {
   const i = seq.findIndex(z => z.id === cur.id);
   return seq[i + dir] || null;
 }
+function nextSleep(day, b) {
+  const i = day.blocks.indexOf(b);
+  return day.blocks.slice(i + 1).find(x => x.t === 'sleep' && x.st !== 'skip' && x.poi) || null;
+}
 function blockPoint(b) {
   if (b.t === 'travel') return b.toZone && Z[b.toZone] ? { lat: Z[b.toZone].lat, lng: Z[b.toZone].lng, zone: b.toZone } : null;
   return b.poi && P[b.poi] ? ptOf(P[b.poi]) : null;
@@ -496,7 +502,7 @@ function flow(day, assign) {
       b.poi = best && !tooFar ? best.p.id : null;
       b.far = tooFar ? best.p.id : null;
     }
-    const dest = blockPoint(b);
+    const dest = b.t === 'carofc' ? (nextSleep(day, b) ? blockPoint(nextSleep(day, b)) : null) : blockPoint(b);
     if (b.t !== 'travel') { r.miles = dest ? hav(from, dest) : 0; r.travel = driveMin(r.miles); } else r.travel = 0;
     if (b.st === 'done') { r.s = b.s0; r.e = b.s1; }
     else if (b.st === 'active') { r.s = b.s0; r.e = Math.max(b.s0 + b.dur * MIN, now); r.over = now > b.s0 + b.dur * MIN; }

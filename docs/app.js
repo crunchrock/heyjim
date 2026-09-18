@@ -119,7 +119,9 @@ function toast(msg, undo) {
 A.undo = () => { const u = toast.undo; $('#toast').hidden = true; if (u) { u(); save(); refresh(); } };
 A.close = () => closeSheet(true);
 A.back = () => closeSheet();
+let dragEnd = 0;
 document.addEventListener('click', e => {
+  if (Date.now() - dragEnd < 350) { e.preventDefault(); e.stopPropagation(); return; }
   const tb = e.target.closest('#tabs button');
   if (tb) { tab = tb.dataset.tab; closeSheet(true); return; }
   if (e.target.id === 'sheetBack') return closeSheet(true);
@@ -130,6 +132,48 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => { const el = e.target.closest('[data-c]'); if (el) C[el.dataset.c]?.(el); });
 document.addEventListener('input', e => { if (e.target.id === 'placesQ') { placesQ = e.target.value; $('#placesResults').innerHTML = placesResults(); } });
+// drag a block card by its ⋮⋮ handle to reorder the day
+(() => {
+  let d = null;
+  const pageY = e => e.clientY + scrollY;
+  document.addEventListener('pointerdown', e => {
+    const h = e.target.closest('[data-drag]');
+    if (!h) return;
+    e.preventDefault();
+    const list = [...document.querySelectorAll('.tl .blk')], el = h.closest('.blk');
+    const boxes = list.map(x => { const r = x.getBoundingClientRect(); return { top: r.top + scrollY, h: r.height }; });
+    d = { el, list, boxes, idx: list.indexOf(el), to: list.indexOf(el), y0: pageY(e), pid: e.pointerId };
+    el.classList.add('dragging');
+    try { h.setPointerCapture(e.pointerId); } catch {}
+  });
+  document.addEventListener('pointermove', e => {
+    if (!d || e.pointerId !== d.pid) return;
+    if (e.clientY < 90) scrollBy(0, -14); else if (e.clientY > innerHeight - 140) scrollBy(0, 14);
+    const dy = pageY(e) - d.y0, me = d.boxes[d.idx], mid = me.top + me.h / 2 + dy;
+    d.el.style.transform = `translateY(${dy}px)`;
+    let to = 0;
+    d.boxes.forEach((b, i) => { if (i !== d.idx && b.top + b.h / 2 < mid) to++; });
+    d.to = to;
+    const shift = me.h + 8;
+    d.list.forEach((x, i) => {
+      if (i === d.idx) return;
+      x.style.transform = d.idx < i && i <= to ? `translateY(${-shift}px)` : to <= i && i < d.idx ? `translateY(${shift}px)` : '';
+    });
+  });
+  const end = () => {
+    if (!d) return;
+    const { idx, to, list } = d;
+    list.forEach(x => { x.style.transform = ''; x.classList.remove('dragging'); });
+    d = null; dragEnd = Date.now();
+    if (to === idx) return;
+    const day = getDay(sel);
+    const [b] = day.blocks.splice(idx, 1);
+    day.blocks.splice(to, 0, b);
+    autofill(day); render(); toast(`${BT[b.t].n} moved`);
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+})();
 // swipe the sheet down to dismiss
 (() => {
   let y0 = null;
@@ -153,7 +197,7 @@ function hoursChip(p, ts = Date.now(), dur = 0, quiet) {
 // Rows only show chips that change a decision: real hours, confirmed/reported evidence, overnight risk, waterfront perks.
 function placeChips(p, type, ts, dur) {
   const out = [];
-  if (type === 'sleep') { if (is247(p)) out.push(chip('24h restroom access', 'ok')); }
+  if (type === 'sleep') { const lc = lotChip(p); if (lc) out.push(chip(lc[0], lc[1])); if (is247(p)) out.push(chip('24h restroom access', 'ok')); }
   else { const hc = hoursChip(p, ts, dur, true); if (hc) out.push(hc); }
   const tc = trustChip(p, type && BT[type]?.caps?.length ? BT[type].caps : null);
   if (type !== 'sleep' && tc[1]) out.push(chip(tc[0], tc[1]));
@@ -242,7 +286,7 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['deep', 'Work spot'], ['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['panera', 'Panera'], ['library', 'Library'], ['sleep', 'Sleep spot'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['grill', 'Grill'], ['car', 'Auto parts']];
+  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['meal', 'Food'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ['restroom', 'Restroom'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
   return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
@@ -353,11 +397,17 @@ function blockHtml(r, day, isNext, isToday, prevPoi) {
   let acts = '';
   if (isToday && b.st === 'active') acts = `<div class="blk-acts"><button class="btn sm primary" data-a="doneBlk" data-id="${b.id}">✓ Done</button><button class="btn sm" data-a="extend" data-id="${b.id}">+30m</button>${p ? `<button class="btn sm" data-a="nav" data-id="${p.id}">Directions</button>` : ''}</div>`;
   else if (isToday && isNext) acts = `<div class="blk-acts">${p || b.t === 'travel' ? `<button class="btn sm primary" data-a="goBlk" data-id="${b.id}">Go</button>` : ''}<button class="btn sm" data-a="startBlk" data-id="${b.id}">Start</button><button class="btn sm ghost" data-a="doneBlk" data-id="${b.id}">Done</button></div>`;
+  // resize right on the card
+  if (b.st !== 'done' && b.t !== 'sleep' && !r.skip) {
+    const st = WORK_BLOCKS.has(b.t) ? 30 : 15;
+    const ctl = `<div class="dur"><button data-a="dur" data-id="${b.id}" data-v="-${st}" aria-label="Shorter">−</button><span>${fmtDur(b.dur)}</span><button data-a="dur" data-id="${b.id}" data-v="${st}" aria-label="Longer">+</button></div>`;
+    acts = acts ? acts.replace('<div class="blk-acts">', '<div class="blk-acts">' + ctl) : `<div class="blk-acts">${ctl}</div>`;
+  }
   const time = r.skip ? '' : b.t === 'sleep' ? fmtTime(r.s) : `${fmtTime(r.s)}<small>${fmtDur(b.st === 'done' ? (r.e - r.s) / MIN : b.dur)}</small>`;
-  return leg + `<div class="blk ${cls}"><div class="blk-time">${time}</div>
+  return leg + `<div class="blk ${cls}" data-bid="${b.id}"><div class="blk-time">${time}</div>
     <div class="blk-body" data-a="openBlock" data-id="${b.id}">
-      <div class="blk-title"><span class="ic">${def.ic}</span><span class="grow ell">${esc(blockTitle(b))}</span>${b.st === 'active' ? chip(r.over ? 'Over' : 'Now', 'acc') : ''}${b.st === 'done' ? chip('Done', 'ok') : ''}${r.skip ? chip('Skipped') : ''}</div>
-      ${b.t === 'carofc' ? `<div class="blk-place muted">Wherever you're parked${prevPoi ? ' · ' + esc(P[prevPoi].n) : ''}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
+      <div class="blk-title"><span class="ic">${def.ic}</span><span class="grow ell">${esc(blockTitle(b))}</span>${b.st === 'active' ? chip(r.over ? 'Over' : 'Now', 'acc') : ''}${b.st === 'done' ? chip('Done', 'ok') : ''}${r.skip ? chip('Skipped') : ''}<span class="drag" data-drag="${b.id}" aria-label="Drag to reorder">⋮⋮</span><button class="bx" data-a="delBlk" data-id="${b.id}" aria-label="Remove">×</button></div>
+      ${b.t === 'carofc' ? `<div class="blk-place muted">${nextSleep(day, b) ? 'At tonight\'s spot · ' + esc(P[nextSleep(day, b).poi].n) : 'Wherever you\'re parked'}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
       ${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${warns}${conv}${acts}</div></div>`;
 }
 function findBlock(id) {
