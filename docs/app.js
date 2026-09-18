@@ -318,12 +318,13 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['meal', 'Food'], ['meat', 'Meat deals'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars']] : []), ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['restroom', 'Restroom'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
+  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['restroom', 'Restroom'], ['gas', 'Gas'], ['meal', 'Food'], ['meat', 'Meat deals'], ['mall', 'Malls'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars']] : []), ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
   return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
 A.needList = ({ t }) => openSheet(() => listSheet(t));
 function listSheet(t, limit = 25) {
+  if (t === 'gas') return sheetHead('⛽ Gas', 'Murphy USA first: usually cheapest') + `<a class="btn big" target="_blank" rel="noopener" href="https://www.gasbuddy.com/home?search=${encodeURIComponent((zoneOfPoint(here())?.n.split(' / ')[0] || '') + ', FL')}">Live prices on GasBuddy</a>` + `<div class="list" style="margin-top:10px">${rank('gas').slice(0, 20).map(r => placeRow(r, 'gas')).join('') || '<div class="empty">No gas stations in the data near here yet.</div>'}</div>`;
   if (t === 'deep') return sheetHead('🎮 Work spots', 'Near ' + esc(locLabel())) + devOptions(here(), Date.now(), x => `<button class="btn sm go" data-a="nav" data-id="${x.p.id}">Go</button>`);
   const rows = rank(t, { dur: t === 'sleep' ? 0 : BT[t].dur }).slice(0, limit);
   const note = t === 'sleep' ? `<p class="note">Practical shortlist, not permission. Sketchy / gray-area spots are labeled. Newest iOverlander check-ins break ties.</p>` : '';
@@ -445,6 +446,13 @@ function blockHtml(r, day, isNext, isToday, prevPoi) {
     const st = WORK_BLOCKS.has(b.t) ? 30 : 15;
     const ctl = `<div class="dur"><button data-a="dur" data-id="${b.id}" data-v="-${st}" aria-label="Shorter">−</button><span>${fmtDur(b.dur)}</span><button data-a="dur" data-id="${b.id}" data-v="${st}" aria-label="Longer">+</button></div>`;
     acts = acts ? acts.replace('<div class="blk-acts">', '<div class="blk-acts">' + ctl) : `<div class="blk-acts">${ctl}</div>`;
+  }
+  if (p && b.st !== 'done' && !r.skip) {
+    const ic = amenIcons(p);
+    if (ic.length) {
+      const row = `<span class="amen">${ic.map(([i, t]) => `<span title="${t}">${i}</span>`).join('')}</span>`;
+      acts = acts ? acts.replace(/<\/div>$/, row + '</div>') : `<div class="blk-acts">${row}</div>`;
+    }
   }
   const time = r.skip ? '' : b.t === 'sleep' ? fmtTime(r.s) : `${fmtTime(r.s)}<small>${fmtDur(b.st === 'done' ? (r.e - r.s) / MIN : b.dur)}</small>`;
   return leg + `<div class="blk ${cls}" data-bid="${b.id}"><div class="blk-time">${time}</div>
@@ -703,7 +711,7 @@ function travelPicker(day, b) {
 A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b.durSet = false; autofill(day); refresh(); toast('Later blocks re-picked around ' + Z[z].n); };
 
 // add blocks
-const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'kava', 'panera', 'library', 'carofc', 'meat', 'books', 'vape', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
+const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'kava', 'panera', 'library', 'carofc', 'mall', 'meat', 'gas', 'books', 'vape', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
 A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
 A.addBlock = ({ t, poi, dur, next, auto }) => {
   if (t === 'sleep' && poi) return A.reconQuick({ id: poi });
@@ -817,6 +825,7 @@ function placeSheet(id, type, blk) {
   h += `<div class="chips">${chip(st.txt, st.k === 'open' || st.k === '24h' ? (st.soon ? 'warn' : 'ok') : st.k === 'closed' ? 'bad' : '')} ${chip(tc[0], tc[1])} ${sk ? chip(sk[0], sk[1]) : ''} ${wfChips(p).map(([t, c]) => chip(t, c)).join(' ')}</div>`;
   h += `<div class="acts"><button class="btn primary" data-a="nav" data-id="${id}">Directions</button><button class="btn" data-a="fav" data-id="${id}">${S.fav[id] ? '★ Saved' : '☆ Save'}</button>
     <a class="btn" href="${mapsSearch(p)}" target="_blank" rel="noopener">Photos / reviews</a>${p.ph ? `<a class="btn" href="tel:${esc(p.ph.replace(/[^\d+]/g, ''))}">Call</a>` : p.web ? `<a class="btn" href="${esc(p.web)}" target="_blank" rel="noopener">Website</a>` : ''}</div>`;
+  { const ic = amenIcons(p); if (ic.length) h += `<div class="amenrow">${ic.map(([i, t]) => `<span>${i} ${t}</span>`).join('')}</div>`; }
   if (blk) h += `<button class="btn big primary" data-a="pickPlace" data-blk="${blk}" data-id="${id}">Use for this block</button>`;
   else if (types.length) h += `<label class="lbl">Add to ${dayLabel(sel)} as</label><div class="chips">${types.map(t => `<button class="chip acc" data-a="addBlock" data-t="${t}" data-poi="${id}">${BT[t].ic} ${BT[t].n}</button>`).join('')}</div>`;
   if (p.a) h += `<h2>Address</h2><div class="row"><div class="grow">${esc(p.a)}${!p.lat || p.gq === 'city' ? '<div class="tiny faint">Map pin approximate. Directions use the name + address.</div>' : ''}</div><button class="btn sm" data-a="copy" data-v="${esc(p.a)}">Copy</button></div>`;

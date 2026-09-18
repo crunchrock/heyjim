@@ -199,3 +199,5 @@ a.btn { text-decoration: none; }
 .recon { margin-top: 8px; }
 .rrow { display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 3px 0; }
 .rrow.good { color: var(--ok); } .rrow.bad { color: var(--faint); text-decoration: line-through; }
+.amen { margin-left: auto; display: inline-flex; gap: 4px; font-size: 14px; opacity: .75; align-self: center; }
+.amenrow { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); margin: 4px 0 8px; }
