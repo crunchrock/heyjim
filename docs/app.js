@@ -167,11 +167,12 @@ function placeRow(r, type, extra = '') {
   return `<div class="place" data-a="openPlace" data-id="${p.id}"${type ? ` data-t="${type}"` : ''}>
     <div class="main"><div class="nm">${esc(p.n)}</div><div class="meta">${esc(catLabel(p))} · ${esc(p.city || p._z?.n || '')}</div>
     <div class="chips" style="margin-top:6px">${placeChips(p, type, r.at, r.dur)}</div></div>
-    <div class="side"><span class="dist">${r.mi != null ? (r.approx ? '≈' : '') + fmtMi(r.mi) : ''}</span>${extra || `<button class="btn sm go" data-a="nav" data-id="${p.id}">Go</button>`}</div></div>`;
+    <div class="side"><span class="dist">${r.approx || (r.p.lat == null) ? '<span class="tiny muted">no pin</span>' : r.mi != null ? fmtMi(r.mi) : ''}</span>${extra || `<button class="btn sm go" data-a="nav" data-id="${p.id}">Go</button>`}</div></div>`;
 }
 function locLabel() {
-  if (S.zone && Z[S.zone]) return Z[S.zone].n + ' (planning)';
-  if (S.loc) return 'Near ' + nearestZone(S.loc).n;
+  const short = z => z.n.split(' / ')[0];
+  if (S.zone && Z[S.zone]) return 'Planning: ' + short(Z[S.zone]);
+  if (S.loc) return (S.loc.acc > 3000 ? '≈ ' : '') + short(nearestZone(S.loc));
   return 'Set location';
 }
 function greeting() { const h = new Date().getHours(); return h < 4 ? 'Late night' : h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening'; }
@@ -184,7 +185,7 @@ function vToday() {
   if (!sel || sel < t) sel = t;
   const d = new Date();
   let h = `<div class="top"><div><div class="sub">${WD[d.getDay()]} ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${fmtTime(Date.now())}</div><h1>${sel === t ? greeting() : dayLabel(sel)}</h1></div>
-    <button class="btn sm" data-a="zonePick">📍 ${esc(locLabel())}</button></div>`;
+    <button class="btn sm loc" data-a="zonePick">📍 ${esc(locLabel())}</button></div>`;
   h += `<div class="scroller">${Array.from({ length: 10 }, (_, i) => addDays(t, i)).map(k =>
     `<button class="pill ${k === sel ? 'on' : ''}" data-a="selDay" data-d="${k}">${dayLabel(k)}${S.days[k]?.blocks.length ? ' ·' + S.days[k].blocks.length : ''}</button>`).join('')}</div>`;
   if (sel === t) h += alertsHtml() + coverageHtml() + wxHtml() + needsHtml() + suggestHtml();
@@ -224,7 +225,7 @@ function needsHtml() {
   });
   status.push(`<button class="chip blue" data-a="tabTo" data-t="me">Next lift: ${esc(WORKOUTS[S.workout % 5].n)}</button>`);
   const tiles = NEED_TILES.map(([t, label]) => {
-    const r = rank(t, { from, dur: 10 }).find(x => x.f.k !== 'closed');
+    const r = rank(t, { from, dur: 10 })[0];
     return `<button class="need" data-a="needList" data-t="${t}"><span class="ic">${BT[t].ic}</span>${label}<span class="nx">${r ? fmtMi(r.mi) : '—'}</span></button>`;
   }).join('');
   return `<h2>Right now</h2><div class="chips" style="margin-bottom:10px">${status.join('')}</div><div class="needs">${tiles}</div>`;
@@ -261,7 +262,7 @@ function suggestHtml() {
   const list = suggest();
   if (!list.length) return '';
   return `<h2>Good right now</h2><div class="stack">${list.map(([t, why]) => {
-    const r = rank(t).find(x => x.f.k !== 'closed');
+    const r = rank(t)[0];
     if (!r) return '';
     return `<div class="card" data-a="openPlace" data-id="${r.p.id}" data-t="${t}"><div class="row"><span style="font-size:22px">${BT[t].ic}</span>
       <div class="grow"><b>${BT[t].n}</b> <span class="muted small">· ${esc(why)}</span><div class="small ell">${esc(r.p.n)} · ${fmtMi(r.mi)}</div></div></div>
@@ -546,7 +547,7 @@ A.quickLog = ({ k }) => { const prev = S.last[k]; S.last[k] = Date.now(); save()
 A.zonePick = () => openSheet(() => {
   const from = S.loc || here();
   const zs = D.zones.map(z => ({ z, mi: hav(from, z) })).sort((a, b) => a.z.o - b.z.o);
-  return sheetHead('Location', S.zone ? 'Planning from ' + esc(Z[S.zone].n) : 'Using GPS') +
+  return sheetHead('Location', S.zone ? 'Planning from ' + esc(Z[S.zone].n) : S.loc ? `Using GPS${S.loc.acc ? ' (±' + (S.loc.acc > 1600 ? Math.round(S.loc.acc / 1609) + ' mi' : S.loc.acc + ' m') + ')' : ''} · ${fmtAgo(S.loc.t)}` : 'No location yet') +
     `<button class="btn big primary" data-a="useGps">📍 Use my GPS location</button><p class="note">Or plan as if you're in a zone (route order):</p>
     <div class="list">${zs.map(({ z, mi }) => `<div class="place" data-a="setHome" data-z="${z.id}"><div class="main"><div class="nm">${z.o}. ${esc(z.n)}</div><div class="meta">${esc(z.r || '')}${z.stay ? ` · stay ${z.stay[0]}–${z.stay[1]}d` : ''}</div></div><div class="side"><span class="dist">${S.loc ? fmtMi(mi) : ''}</span></div></div>`).join('')}</div>`;
 });

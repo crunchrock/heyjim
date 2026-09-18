@@ -118,9 +118,9 @@ function locate(fresh) {
   return new Promise(res => {
     if (!navigator.geolocation) return res(null);
     navigator.geolocation.getCurrentPosition(pos => {
-      S.loc = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: Date.now() };
+      S.loc = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: Date.now(), acc: Math.round(pos.coords.accuracy || 0) };
       save(); res(S.loc);
-    }, () => res(null), { enableHighAccuracy: false, timeout: 12000, maximumAge: fresh ? 0 : 5 * MIN });
+    }, () => res(null), { enableHighAccuracy: !!fresh, timeout: 12000, maximumAge: fresh ? 0 : 5 * MIN });
   });
 }
 
@@ -297,7 +297,7 @@ const BT = {
   dash: { n: 'DoorDash', ic: '🚗', dur: 210, log: 'dash', m: p => !!p._dd || p.tags.includes('door_dash') || p.c === 'doordash_cluster', b: p => (p._dd ? 5 + (p._dd.score || 0) / 20 : 0), caps: [], hint: 'One peak block. Don\'t chase red zones 20 miles away.' },
   gym: { n: 'Gym + shower', ic: '🏋️', dur: 80, log: 'gym', m: hasCap('gym'), b: p => (is247(p) ? 3 : 0), caps: ['gym', 'shower'], hint: '' },
   shower: { n: 'Shower', ic: '🚿', dur: 30, log: 'shower', m: p => p.caps.shower || p.am.includes('shower'), b: p => (p.caps.shower ? 2 : 0), caps: ['shower'], hint: 'Outdoor beach showers count too.' },
-  meal: { n: 'Meal', ic: '🍜', dur: 50, m: hasCap('meal', 'protein_food', 'ramen', 'buffet', 'all_you_can_eat'), b: p => (p._food ? 3 : 0) + (p.caps.ramen ? 2 : 0) + (/cava|chipotle/i.test(p.n) ? 2 : 0), caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
+  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => p.c === 'food' && !/walmart|grocery/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat), b: p => (p._food ? 3 : 0) + (p.caps.ramen ? 2 : 0) + (/cava|chipotle/i.test(p.n) ? 2 : 0), caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
   grill: { n: 'Grill dinner', ic: '🔥', dur: 90, log: 'water', m: p => p.caps.public_grill || p.am.includes('grill'), b: p => wfBonus(p), caps: ['public_grill'], hint: 'Charcoal, foil, lighter. Check fire rules.' },
   car: { n: 'Car work', ic: '🔧', dur: 240, log: 'car', m: hasCap('auto_parts', 'repair_support', 'auto_service', 'loan_tools'), b: p => (p.caps.loan_tools || p.x.tools ? 3 : 0) + (p.x.lotRepair ? 3 : 0), caps: ['auto_parts', 'loan_tools', 'repair_support'], hint: 'Parts run + lot work. Test drive after.' },
   water: { n: 'Water refill', ic: '💧', dur: 15, log: 'water_refill', m: hasCap('buy_drinking_water', 'water_source_candidate'), b: () => 0, caps: ['buy_drinking_water', 'water_source_candidate'], hint: '3-gal jug at the refill machine (~$1.50).' },
@@ -322,32 +322,37 @@ function sleepBonus(p) {
   return s;
 }
 
-// rank candidate places for a block type near `from` at time `at`
-function rank(type, { from = here(), at = Date.now(), dur, radius = 30, prev } = {}) {
+// rank candidate places for a block type near `from` at time `at`.
+// Distance dominates; closed places sink but stay visible (labeled with when they open); nothing past maxMi.
+// `anchor` keeps a day's blocks in its zone so plans don't drift town to town without a Travel block.
+const MAX_MI = { fun: 70, social: 60, sleep: 40 };
+function rank(type, { from = here(), at = Date.now(), dur, prev, anchor, maxMi } = {}) {
   const def = BT[type];
   if (!def?.m) return [];
   if (dur == null) dur = def.dur;
+  maxMi ??= MAX_MI[type] || 45;
   const out = [];
   for (const p of D.pois) {
     if (!def.m(p) || S.avoid[p.id] || p.use === 'known_unavailable') continue;
     if (type === 'sleep' && p._ov?.st === 'prohibited') continue;
     const pt = ptOf(p);
-    const mi = pt ? hav(from, pt) : 999;
-    if (mi > radius * 3) continue;
+    if (!pt) continue;
+    // unlocated places sit at their zone center: keep them, but never pretend we know the distance
+    const mi = hav(from, pt) + (pt.approx ? 4 : 0);
+    if (mi > maxMi) continue;
     const f = fit(p, at, type === 'sleep' ? 0 : dur);
-    let s = -mi * (mi > radius ? 2 : 1) * (type === 'sleep' ? 0.7 : 1);
-    if (type !== 'sleep') s += f.k === 'ok' ? 6 : f.k === 'unk' ? 0 : f.k === 'short' ? -3 - 14 * (1 - f.cover) : -30;
+    let s = -mi - Math.max(0, mi - 12);
+    if (anchor) { const am = hav(anchor, pt); if (am > 10) s -= (am - 10) * 0.7; }
+    if (type !== 'sleep') s += f.k === 'ok' ? 5 : f.k === 'unk' ? 0 : f.k === 'short' ? -3 - 12 * (1 - f.cover) : -12;
     const e = evOf(p, def.caps.length ? def.caps : null);
     s += e === 'd' ? 3 : e === 'r' ? 2 : 0;
     s += def.b(p) + (S.fav[p.id] ? 8 : 0) + obsScore(p.id) * 3;
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) s -= 40;
-    if (pt?.approx) s -= 2;
+    if (pt.approx) s -= 2;
     if (prev && prev === p.id) s += 2;
-    out.push({ p, s, mi, f, approx: !!pt?.approx });
+    out.push({ p, s, mi, f, approx: !!pt.approx });
   }
-  out.sort((a, b) => b.s - a.s);
-  if (out.filter(r => r.mi <= radius).length < 3 && radius < 200) return rank(type, { from, at, dur, radius: radius * 2.5, prev });
-  return out;
+  return out.sort((a, b) => b.s - a.s);
 }
 
 // ---------- day model
@@ -440,7 +445,7 @@ function dayOrigin(day) {
 function flow(day, assign) {
   if (!day) return [];
   const now = Date.now(), isToday = day.date === today(), clamp = day.date <= today();
-  let t = dateTs(day.date, day.startMin ?? 480), from = dayOrigin(day).pt, prevPoi = null;
+  let t = dateTs(day.date, day.startMin ?? 480), from = dayOrigin(day).pt, anchor = from, prevPoi = null;
   const rows = [];
   for (const b of day.blocks) {
     const r = { b, warn: [] };
@@ -453,9 +458,9 @@ function flow(day, assign) {
     }
     if (assign && b.st === 'plan' && BT[b.t].m && (assign === 'all' ? !b.pinned : !b.poi)) {
       const at = Math.max(t, clamp ? now : 0) + 10 * MIN;
-      let best = rank(b.t, { from, at, dur: b.dur, prev: prevPoi })[0];
+      let best = rank(b.t, { from, at, dur: b.dur, prev: prevPoi, anchor })[0];
       // nothing of this kind nearby (e.g. no indie café): fall back to a similar block type
-      if (BT[b.t].alt && (!best || best.mi > 15)) { const alt = rank(BT[b.t].alt, { from, at, dur: b.dur, prev: prevPoi })[0]; if (alt && (!best || alt.mi < best.mi)) best = alt; }
+      if (BT[b.t].alt && (!best || best.mi > 15)) { const alt = rank(BT[b.t].alt, { from, at, dur: b.dur, prev: prevPoi, anchor })[0]; if (alt && (!best || alt.mi < best.mi)) best = alt; }
       b.poi = best ? best.p.id : null;
     }
     const dest = blockPoint(b);
@@ -466,6 +471,7 @@ function flow(day, assign) {
     if (b.st !== 'done') blockWarnings(b, r);
     t = r.e;
     if (dest) from = dest;
+    if (b.t === 'travel' && dest) anchor = dest;
     if (b.poi) prevPoi = b.poi;
     rows.push(r);
   }
@@ -477,7 +483,7 @@ function blockWarnings(b, r) {
   if (p) {
     r.fit = fit(p, r.s, b.t === 'sleep' ? 0 : b.dur);
     const sunsetGate = p.h && /sunset|dusk|daylight/.test(p.h.join(' '));
-    if (r.fit.k === 'closed') r.warn.push((b.t === 'sleep' ? 'Closed when you arrive (' : 'Closed at that time (') + r.fit.txt.replace('Closed · ', '') + ')');
+    if (r.fit.k === 'closed') r.warn.push(b.t === 'sleep' ? `Business closed overnight (${r.fit.txt.replace('Closed · ', '')}): lot only, no restroom` : 'Closed at that time (' + r.fit.txt.replace('Closed · ', '') + ')');
     else if (r.fit.k === 'short') r.warn.push((sunsetGate ? 'Gate closes around sunset: ' : '') + r.fit.txt + ` of ${fmtDur(b.dur)}`);
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) r.warn.push('Listed as temporarily closed');
     if (b.t === 'sleep') { const ln = lastNight(p.id); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + fmtAgo(ln) + '. Rotate?'); }

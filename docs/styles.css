@@ -182,3 +182,4 @@ body.map-on .toast { bottom: calc(var(--safe-b) + 142px); }
 a.btn { text-decoration: none; }
 .grid2 > .card { margin-top: 0; }
 .map-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7); }
+.btn.loc { max-width: 52vw; overflow: hidden; text-overflow: ellipsis; display: inline-block; }

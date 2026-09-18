@@ -107,7 +107,7 @@ function sanityCheck(lat, lng, zoneCenter) {
     return false;
   }
   if (!inFloridaBbox(lat, lng)) return false;
-  if (zoneCenter) {
+  if (zoneCenter && zoneCenter.latitude != null) {
     const dist = haversineMiles(lat, lng, zoneCenter.latitude, zoneCenter.longitude);
     if (dist > MAX_ZONE_DIST_MILES) return false;
   }
