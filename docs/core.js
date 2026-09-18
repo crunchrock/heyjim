@@ -412,6 +412,8 @@ function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi,
   if (!def?.m) return [];
   if (dur == null) dur = def.dur;
   maxMi ??= MAX_MI[type] || 45;
+  // bars are judged on their evening, not whenever you happen to be looking
+  if (type === 'social' && new Date(at).getHours() < 16) { const d = new Date(at); d.setHours(18, 0, 0, 0); at = d.getTime(); }
   const out = [];
   for (const p of D.pois) {
     if (!def.m(p) || S.avoid[p.id] || p.use === 'known_unavailable') continue;
