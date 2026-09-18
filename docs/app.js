@@ -242,12 +242,13 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['panera', 'Panera'], ['library', 'Library'], ['sleep', 'Sleep spot'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['grill', 'Grill'], ['car', 'Auto parts']];
+  const items = [['deep', 'Work spot'], ['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['panera', 'Panera'], ['library', 'Library'], ['sleep', 'Sleep spot'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['grill', 'Grill'], ['car', 'Auto parts']];
   return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
 A.needList = ({ t }) => openSheet(() => listSheet(t));
 function listSheet(t, limit = 25) {
+  if (t === 'deep') return sheetHead('🎮 Work spots', 'Near ' + esc(locLabel())) + devOptions(here(), Date.now(), x => `<button class="btn sm go" data-a="nav" data-id="${x.p.id}">Go</button>`);
   const rows = rank(t, { dur: t === 'sleep' ? 0 : BT[t].dur }).slice(0, limit);
   const note = t === 'sleep' ? `<p class="note">Practical shortlist, not permission. Sketchy / gray-area spots are labeled. Newest iOverlander check-ins break ties.</p>` : '';
   return sheetHead(`${BT[t].ic} ${BT[t].n}`, 'Best matches near ' + esc(locLabel().replace('Near ', ''))) + note +
@@ -472,6 +473,7 @@ function blockSheet(id) {
     if (p) h += `<h2>Place</h2><div class="list">${placeRow({ p, mi: r.miles, at: r.s, dur: b.dur }, b.t, `<button class="btn sm" data-a="openPlace" data-id="${p.id}" data-t="${b.t}">Info</button>`)}</div>`;
     const prevPt = (() => { let pt = dayOrigin(day).pt; for (const x of rows) { if (x.b === b) break; const q = !x.skip && blockPoint(x.b); if (q) pt = q; } return pt; })();
     const alts = rank(b.t, { from: prevPt, at: r.s || Date.now(), dur: b.dur }).filter(x => x.p.id !== b.poi).slice(0, 12);
+    if (b.t === 'deep') return h + `<h2>${p ? 'Or work from' : 'Where to work'}</h2>` + devOptions(prevPt, r.s || Date.now(), x => `<button class="btn sm primary" data-a="pickPlace" data-blk="${id}" data-id="${x.p.id}" data-dur="${x.dur}">Use</button>`, b.poi);
     h += `<h2>${p ? 'Swap for' : 'Pick a place'}</h2><div class="list">${alts.map(x => placeRow({ ...x, at: r.s, dur: b.dur }, b.t, `<button class="btn sm primary" data-a="pickPlace" data-blk="${id}" data-id="${x.p.id}">Use</button>`)).join('') || '<div class="empty">Nothing nearby.</div>'}</div>`;
   }
   return h;
@@ -486,9 +488,21 @@ A.blockMenu = ({ id }) => openSheet(() => {
     <button class="btn big" data-a="delBlk" data-id="${id}" style="color:var(--bad)">Delete block</button></div>`;
 });
 A.convBlk = ({ id, t }) => { const { day, b } = findBlock(id); b.t = t; b.dur = Math.max(b.dur, BT[t].dur); b.poi = null; b.pinned = false; autofill(day); refresh(); toast(`Now a ${BT[t].n} block` + (b.poi ? ': ' + P[b.poi].n : '')); };
+// Dev session options grouped by kind of spot, best 3 of each, nearest-first within the day's area
+function devOptions(from, at, btn, skip) {
+  const all = rank('deep', { from, at, dur: 120 }).filter(x => x.p.id !== skip && x.mi <= 20);
+  return DEV_KINDS.map(([k, ic, label, , mins]) => {
+    const list = all.filter(x => devKind(x.p)[0] === k).slice(0, 3).map(x => ({ ...x, at, dur: mins }));
+    if (!list.length) return '';
+    return `<div class="lbl" style="margin-top:14px">${ic} ${label} · ${fmtDur(mins)}</div><div class="list">${list.map(x => placeRow(x, 'deep', btn(x))).join('')}</div>`;
+  }).join('') || '<div class="empty">No work spots in the data near here.</div>';
+}
+A.devPick = () => openSheet(() => sheetHead('🎮 Dev session', 'Where do you want to work?') +
+  `<button class="btn big" data-a="addBlock" data-t="deep" data-auto="1">Let the app choose</button>` +
+  devOptions(here(), Date.now(), x => `<button class="btn sm primary" data-a="addBlock" data-t="deep" data-poi="${x.p.id}" data-dur="${x.dur}" data-auto="1">Add</button>`));
 A.dur = ({ id, v }) => { const { b } = findBlock(id); b.dur = Math.max(5, b.dur + +v); b.durSet = true; save(); refresh(); };
 A.durSet = ({ id, v }) => { const { b } = findBlock(id); b.dur = +v; b.durSet = true; if (b.t === 'water_s' && +v >= 180) b.t = 'water_l'; else if (b.t === 'water_l' && +v < 180) b.t = 'water_s'; save(); refresh(); };
-A.pickPlace = ({ blk, id }) => { const { b } = findBlock(blk); b.poi = id; b.pinned = true; save(); closeSheet(); toast('Set: ' + P[id].n); };
+A.pickPlace = ({ blk, id, dur }) => { const { b } = findBlock(blk); b.poi = id; b.pinned = true; if (dur && !b.durSet) b.dur = +dur; save(); closeSheet(); toast('Set: ' + P[id].n); };
 A.moveBlk = ({ id, v }) => { const { day, i } = findBlock(id); const j = i + +v; if (j < 0 || j >= day.blocks.length) return; [day.blocks[i], day.blocks[j]] = [day.blocks[j], day.blocks[i]]; save(); refresh(); };
 A.skipBlk = ({ id }) => { const { b } = findBlock(id); b.st = b.st === 'skip' ? 'plan' : 'skip'; save(); closeSheet(true); };
 A.reopenBlk = ({ id }) => { const { b } = findBlock(id); b.st = 'plan'; delete b.s0; delete b.s1; save(); refresh(); };
@@ -516,9 +530,10 @@ function travelPicker(day, b) {
 A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b.durSet = false; autofill(day); refresh(); toast('Later blocks re-picked around ' + Z[z].n); };
 
 // add blocks
-const PALETTE = ['water_work', 'water_s', 'water_l', 'cafe', 'panera', 'library', 'carofc', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
+const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'panera', 'library', 'carofc', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
 A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
-A.addBlock = ({ t, poi, dur, next }) => {
+A.addBlock = ({ t, poi, dur, next, auto }) => {
+  if (t === 'deep' && !poi && !auto) return A.devPick();
   const date = sel;
   const day = S.days[date] ||= { date, startMin: date === today() ? new Date().getHours() * 60 + new Date().getMinutes() : 480, blocks: [] };
   const b = mkBlock(t);

@@ -280,6 +280,19 @@ const isWork = p => p.c === 'work';
 const isCafe = p => isWork(p) && /cafe/.test(p.sc || '') && !/panera/i.test(p.n);
 const isPanera = p => isWork(p) && /panera/i.test(p.n);
 const isLibrary = p => isWork(p) && p.sc === 'library';
+const isRestaurant = p => p.c === 'food' && !/walmart|grocery/i.test((p.sc || '') + p.n);
+const isSocial = p => p.c === 'social' || p.tags.includes('social');
+// where a dev session can happen, in the order options are shown: [key, icon, label, matcher, default minutes, score bonus]
+const DEV_KINDS = [
+  ['water', '🌊', 'Car office by the water', p => isWater(p), 120, 3],
+  ['cafe', '☕', 'Local cafés', p => isCafe(p), 150, 3],
+  ['panera', '🥖', 'Panera: outlets + Sip Club', p => isPanera(p), 180, 2],
+  ['library', '📚', 'Libraries', p => isLibrary(p), 150, 0],
+  ['pf', '🏋️', 'Car office at a PF lot, then lift + shower', p => !!p.caps.gym, 120, 0],
+  ['food', '🍜', 'Eat + laptop', p => isRestaurant(p), 105, -2],
+  ['bar', '🍺', 'Bars / social spots', p => isSocial(p), 120, -2],
+];
+const devKind = p => DEV_KINDS.find(k => k[3](p));
 const isOffice = p => isWork(p) && (/panera/i.test(p.n) || p.sc === 'library' || p.sc === 'chain_cafe');
 const isWater = p => p.c === 'waterfront' || !!p.wf;
 const hasCap = (...cs) => p => cs.some(c => p.caps[c]);
@@ -295,10 +308,10 @@ const BT = {
   water_work: { n: 'Water work session', ic: '💻', dur: 120, log: ['dev', 'water'], m: isWater, b: p => wfBonus(p, 1) + (p.tags.includes('car_office') ? 3 : 0), caps: ['work_outdoors'], hint: 'Laptop on battery (~2h) + inverter + hotspot, car by the water. Design, code, playtest. Save big uploads/builds for Wi-Fi.' },
   water_l: { n: 'Long water day', ic: '🏖️', dur: 240, log: ['dev', 'water'], m: isWater, b: p => wfBonus(p, 1) + (p.tags.includes('car_office') ? 3 : 0), caps: ['work_outdoors', 'recreation'], hint: 'Half a day on the water: work sessions on battery + inverter, breaks, food. Leave before the gate closes.' },
   cafe: { n: 'Local café', ic: '☕', dur: 150, log: 'dev', m: isCafe, b: p => (p.sc === 'independent_cafe' ? 5 : p.sc === 'regional_cafe' ? 3 : 0), caps: ['work_indoor'], alts: ['panera', 'library', 'water_work'], hint: 'Nice environment, focused work.' },
-  panera: { n: 'Panera', ic: '🥖', dur: 180, log: 'dev', m: isPanera, b: () => 0, caps: ['work_indoor'], alts: ['library', 'cafe', 'water_work'], hint: 'The dependable powered office: outlets, Wi-Fi, refills. Do builds, downloads and uploads here.' },
+  panera: { n: 'Panera', ic: '🥖', dur: 180, log: 'dev', m: isPanera, b: () => 0, caps: ['work_indoor'], alts: ['library', 'cafe', 'water_work'], hint: 'The cheap powered office: outlets, Wi-Fi, Sip Club refills. Do builds, downloads and uploads here.' },
   library: { n: 'Library', ic: '📚', dur: 180, log: 'dev', m: isLibrary, b: () => 0, caps: ['work_indoor'], alts: ['cafe', 'panera', 'water_work'], hint: 'Free, quiet, Wi-Fi + outlets. Libraries close early (often 5–8p): check the time.' },
   office: { n: 'Panera or library', ic: '🔌', dur: 180, log: 'dev', m: isOffice, b: p => (/panera/i.test(p.n) ? 4 : p.sc === 'library' ? 2 : 0), caps: ['work_indoor'], hint: 'Panera / library: power + Wi-Fi. Do builds, downloads, uploads here.' },
-  deep: { n: 'Dev session', ic: '🧠', dur: 180, log: 'dev', m: isWork, b: p => (/panera/i.test(p.n) ? 3 : p.sc === 'library' ? 3 : 0), caps: ['work_indoor'], hint: 'Serious Bad Shrooms output. Phone away.' },
+  deep: { n: 'Dev session', ic: '🎮', dur: 150, log: 'dev', m: p => !!devKind(p), b: p => { const k = devKind(p); return k[5] + (k[0] === 'water' ? wfBonus(p) / 2 : 0); }, caps: [], hint: 'Pick any spot that works today: the water, a café, Panera, a library, a restaurant, a bar, or your car at the PF lot.' },
   light: { n: 'Admin / quick tasks', ic: '📋', dur: 60, log: 'dev', m: p => isWork(p) || isWater(p), b: p => (isWater(p) ? wfBonus(p) / 2 : 0), caps: ['work_indoor', 'work_outdoors'], hint: 'Notes, email, small tasks.' },
   dash: { n: 'DoorDash', ic: '🚗', dur: 210, log: 'dash', m: p => !!p._dd || p.tags.includes('door_dash') || p.c === 'doordash_cluster', b: p => (p._dd ? 5 + (p._dd.score || 0) / 20 : 0), caps: [], hint: 'One peak block. Don\'t chase red zones 20 miles away.' },
   gym: { n: 'Gym + shower', ic: '🏋️', dur: 80, log: 'gym', m: hasCap('gym'), b: p => (is247(p) ? 3 : 0), caps: ['gym', 'shower'], hint: '' },
