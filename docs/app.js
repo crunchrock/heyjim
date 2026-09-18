@@ -831,7 +831,7 @@ function placeSheet(id, type, blk) {
   if (p.a) h += `<h2>Address</h2><div class="row"><div class="grow">${esc(p.a)}${!p.lat || p.gq === 'city' ? '<div class="tiny faint">Map pin approximate. Directions use the name + address.</div>' : ''}</div><button class="btn sm" data-a="copy" data-v="${esc(p.a)}">Copy</button></div>`;
   if (p.h) {
     const { dow } = tzParts(new Date(), p.ct);
-    h += `<h2>Hours${p.ct ? ' (Central)' : ''}</h2><table class="hours-tbl">${[1, 2, 3, 4, 5, 6, 0].map(i => `<tr class="${i === dow ? 'today' : ''}"><td>${WD[i]}</td><td style="text-align:right">${esc(p.h[i] ?? 'unknown')}</td></tr>`).join('')}</table>`;
+    h += `<h2>Hours${p.ct ? ' (Central)' : ''}</h2><table class="hours-tbl">${[1, 2, 3, 4, 5, 6, 0].map(i => `<tr class="${i === dow ? 'today' : ''}"><td>${WD[i]}</td><td style="text-align:right">${esc(prettyHours(p.h[i]))}</td></tr>`).join('')}</table>`;
     if (p.x.hx || p.x.warn) h += `<p class="note">${esc([].concat(p.x.hx || [], p.x.warn || []).join(' · '))}</p>`;
   }
   if (p._ov) h += ovHtml(p);
@@ -876,6 +876,8 @@ function mailHtml(p) {
     ${addr ? `<pre class="note" style="font:600 14px/1.5 ui-monospace,monospace;margin:10px 0">${esc(addr)}</pre><button class="btn sm" data-a="copy" data-v="${esc(addr)}">Copy address</button>` : ''}
     ${m.ask ? `<p class="note">${esc(m.ask)}</p>` : ''}${m.pick ? `<p class="note">Pickup: ${esc(typeof m.pick === 'string' ? m.pick : JSON.stringify(m.pick))}</p>` : ''}${m.ph ? `<a class="btn sm" href="tel:${esc(m.ph.replace(/[^\d+]/g, ''))}">Call ${esc(m.ph)}</a>` : ''}</div>`;
 }
+// "16:00-00:00;11:00-14:00" -> "4p–12a, 11a–2p"
+const prettyHours = h => (h == null ? 'unknown' : h === '00:00-24:00' ? 'Open 24h' : String(h).replace(/(\d{1,2}):(\d{2})(\+1)?/g, (m, hh, mm) => fmtClock(+hh * 60 + +mm)).replace(/-/g, '–').replace(/;/g, ', '));
 function barHtml(p) {
   const b = p.bd || {}, fmtD = d => (d ? new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null);
   const t = x => (x ? fmtClock(+x.split(':')[0] * 60 + +x.split(':')[1]) : '');
