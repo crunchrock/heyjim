@@ -195,3 +195,7 @@ a.btn { text-decoration: none; }
 .blk.dragging .blk-body { box-shadow: 0 12px 32px rgba(0,0,0,.28); }
 .drag { touch-action: none; cursor: grab; color: var(--faint); font-size: 17px; letter-spacing: -3px; padding: 2px 8px 2px 6px; user-select: none; -webkit-user-select: none; }
 .bx { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--card2); color: var(--muted); font-size: 16px; line-height: 1; }
+.pdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: middle; }
+.recon { margin-top: 8px; }
+.rrow { display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 3px 0; }
+.rrow.good { color: var(--ok); } .rrow.bad { color: var(--faint); text-decoration: line-through; }

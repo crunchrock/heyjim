@@ -62,7 +62,7 @@ function showLock(msg, buf) {
   };
 }
 function start(data) {
-  indexData(data); pruneDays(); sel = today();
+  indexData(data); pruneDays(); migrate(); sel = today();
   if (!S.settings.name && D.profile?.name) S.settings.name = D.profile.name;
   $('#lock').hidden = true; $('#app').hidden = false;
   render();
@@ -75,6 +75,19 @@ function start(data) {
     locate().then(() => { if (!sheetStack.length) render(); });
     refreshWx();
   });
+}
+function migrate() {
+  if ((S.ver || 0) >= 3) return;
+  for (const day of Object.values(S.days)) {
+    if (day.date < today()) continue;
+    for (const b of day.blocks) {
+      if (b.t === 'office') b.t = 'panera';
+      if (b.st === 'plan' && !b.pinned) b.poi = null;
+      if (b.t === 'sleep' && !b.confirmed) { b.poi = null; b.pinned = false; }
+    }
+    autofill(day, true);
+  }
+  S.ver = 3; save();
 }
 async function refreshWx() {
   const pt = here();
@@ -197,7 +210,12 @@ function hoursChip(p, ts = Date.now(), dur = 0, quiet) {
 // Rows only show chips that change a decision: real hours, confirmed/reported evidence, overnight risk, waterfront perks.
 function placeChips(p, type, ts, dur) {
   const out = [];
-  if (type === 'sleep') { const lc = lotChip(p); if (lc) out.push(chip(lc[0], lc[1])); if (is247(p)) out.push(chip('24h restroom access', 'ok')); }
+  if (type === 'sleep') {
+    const lc = lotChip(p); if (lc) out.push(chip(lc[0], lc[1]));
+    const nc = nightChip(p, ts); if (nc) out.push(chip(nc[0], nc[1]));
+    const neg = obsFor(p.id).filter(o => Date.now() - o.t < 120 * DAY).flatMap(o => o.tags).filter(t => OBS_TAGS[t]?.[1] < 0);
+    if (neg.length) out.push(chip('You noted: ' + OBS_TAGS[neg[neg.length - 1]][0], 'bad'));
+  }
   else { const hc = hoursChip(p, ts, dur, true); if (hc) out.push(hc); }
   const tc = trustChip(p, type && BT[type]?.caps?.length ? BT[type].caps : null);
   if (type !== 'sleep' && tc[1]) out.push(chip(tc[0], tc[1]));
@@ -234,7 +252,7 @@ function vToday() {
   let h = `<div class="top"><div><div class="sub">${WD[d.getDay()]} ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${fmtTime(Date.now())}</div><h1>${sel === t ? greeting() : dayLabel(sel)}</h1></div>
     <button class="btn sm loc" data-a="zonePick">📍 ${esc(locLabel())}</button></div>`;
   h += `<div class="scroller">${Array.from({ length: 10 }, (_, i) => addDays(t, i)).map(k =>
-    `<button class="pill ${k === sel ? 'on' : ''}" data-a="selDay" data-d="${k}">${dayLabel(k)}${S.days[k]?.blocks.length ? ' ·' + S.days[k].blocks.length : ''}</button>`).join('')}</div>`;
+    `<button class="pill ${k === sel ? 'on' : ''}" data-a="selDay" data-d="${k}">${dayLabel(k)}${S.days[k]?.blocks.length ? '<i class="pdot"></i>' : ''}</button>`).join('')}</div>`;
   if (sel === t) h += alertsHtml() + coverageHtml() + wxHtml();
   h += dayHtml(sel);
   if (sel === t) h += attentionHtml() + findHtml();
@@ -296,7 +314,7 @@ function listSheet(t, limit = 25) {
   const rows = rank(t, { dur: t === 'sleep' ? 0 : BT[t].dur }).slice(0, limit);
   const note = t === 'sleep' ? `<p class="note">Practical shortlist, not permission. Sketchy / gray-area spots are labeled. Newest iOverlander check-ins break ties.</p>` : '';
   return sheetHead(`${BT[t].ic} ${BT[t].n}`, 'Best matches near ' + esc(locLabel().replace('Near ', ''))) + note +
-    `<div class="list">${rows.map(r => placeRow(r, t)).join('') || '<div class="empty">Nothing in range.</div>'}</div>`;
+    `<div class="list">${(t === 'sleep' ? rows.slice().sort((a, z) => a.mi - z.mi) : rows).map(r => placeRow(r, t, t === 'sleep' ? `<button class="btn sm primary" data-a="reconQuick" data-id="${r.p.id}">+ Recon</button><button class="btn sm ghost" data-a="nav" data-id="${r.p.id}">Go</button>` : '')).join('') || '<div class="empty">Nothing in range.</div>'}</div>`;
 }
 function suggest() {
   const now = new Date(), h = now.getHours() + now.getMinutes() / 60, out = [];
@@ -341,6 +359,7 @@ function tplScore(tpl, date) {
   const total = tpl.b.reduce((a, x) => { const [t, d] = x.split(':'); return a + (t === 'sleep' ? 0 : (d ? +d : BT[t].dur) + 10); }, 0);
   let s = -Math.abs(total - Math.min(left, 14 * 60)) / 60;
   if (tpl.id === 'blank' || tpl.id === 'car' || tpl.id === 'move') s -= 2;
+  if (tpl.id === 'library') s -= 6;
   if (h < 10 && /water_l/.test(tpl.b.join())) s += 1;
   if (h >= 16 && tpl.id === 'tired') s += 2;
   if (h < 16 && tpl.id === 'cash' && (D.dd[zoneOfPoint(here())?.id] || []).length) s += 0.5;
@@ -391,6 +410,13 @@ function blockHtml(r, day, isNext, isToday, prevPoi) {
   if (p && b.st !== 'done' && !r.skip) chips = placeChips(p, b.t, r.s, b.t === 'sleep' ? 0 : b.dur);
   if (b.t === 'travel' && r.miles) chips = chip(fmtMi(r.miles) + ' ' + (Z[b.toZone] ? bearing(dayOrigin(day).pt, Z[b.toZone]) : ''), 'blue');
   const warns = (r.warn || []).map(w => `<div class="warnline">⚠️ ${esc(w)}${p && /Closed|closes|Gate/.test(w) ? ` <button class="btn sm" data-a="fixBlk" data-id="${b.id}">Fix</button>` : ''}</div>`).join('');
+  // night spot: recon targets until one is confirmed
+  let recon = '';
+  if (b.t === 'sleep' && !b.confirmed && b.st !== 'done') {
+    const tg = (b.recon || []).filter(x => P[x.poi]);
+    recon = tg.length ? `<div class="recon">${tg.map(x => `<div class="rrow ${x.st}"><span>${x.st === 'good' ? '✓' : x.st === 'bad' ? '✗' : '○'}</span><span class="grow ell">${esc(P[x.poi].n)}</span><span class="faint small">${esc((lotChip(P[x.poi]) || [''])[0])}</span></div>`).join('')}</div>` : '';
+    recon += `<div class="blk-acts">${tg.some(x => x.st === 'todo') ? `<button class="btn sm primary" data-a="reconNext" data-blk="${b.id}">▶ Recon next</button>` : ''}<button class="btn sm" data-a="openBlock" data-id="${b.id}">${tg.length ? 'Options + status' : 'Pick spots to check'}</button></div>`;
+  }
   // no good match for this venue type nearby: let him pick what to do instead (never swapped silently)
   const conv = b.st === 'plan' && BT[b.t].alts && (r.warn || []).some(w => /^Nearest|^No /.test(w))
     ? `<div class="blk-acts">${BT[b.t].alts.filter(t => !isToday || localAvail(t)).map(t => `<button class="btn sm" data-a="convBlk" data-id="${b.id}" data-t="${t}">${BT[t].ic} ${BT[t].n} instead</button>`).join('')}${b.far && P[b.far] ? `<button class="btn sm ghost" data-a="pickPlace" data-blk="${b.id}" data-id="${b.far}">Drive to it anyway</button>` : ''}</div>` : '';
@@ -407,8 +433,8 @@ function blockHtml(r, day, isNext, isToday, prevPoi) {
   return leg + `<div class="blk ${cls}" data-bid="${b.id}"><div class="blk-time">${time}</div>
     <div class="blk-body" data-a="openBlock" data-id="${b.id}">
       <div class="blk-title"><span class="ic">${def.ic}</span><span class="grow ell">${esc(blockTitle(b))}</span>${b.st === 'active' ? chip(r.over ? 'Over' : 'Now', 'acc') : ''}${b.st === 'done' ? chip('Done', 'ok') : ''}${r.skip ? chip('Skipped') : ''}<span class="drag" data-drag="${b.id}" aria-label="Drag to reorder">⋮⋮</span><button class="bx" data-a="delBlk" data-id="${b.id}" aria-label="Remove">×</button></div>
-      ${b.t === 'carofc' ? `<div class="blk-place muted">${nextSleep(day, b) ? 'At tonight\'s spot · ' + esc(P[nextSleep(day, b).poi].n) : 'Wherever you\'re parked'}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
-      ${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${warns}${conv}${acts}</div></div>`;
+      ${b.t === 'carofc' ? `<div class="blk-place muted">${nextSleep(day, b)?.confirmed ? 'At tonight\'s spot · ' + esc(P[nextSleep(day, b).poi].n) : nextSleep(day, b) ? 'At or near tonight\'s spot' : 'Wherever you\'re parked'}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
+      ${b.t === 'sleep' && b.confirmed ? chip('✓ Confirmed', 'ok') + ' ' : ''}${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${recon}${warns}${conv}${acts}</div></div>`;
 }
 function findBlock(id) {
   for (const day of Object.values(S.days)) { const i = day.blocks.findIndex(b => b.id === id); if (i >= 0) return { day, b: day.blocks[i], i }; }
@@ -476,7 +502,7 @@ function finishBlock(b, silent) {
   if (k === 'gym') { logEntry('gym', min); S.last.shower = now; msg = `${WORKOUTS[S.workout % 5].n} logged. Shower ✓`; S.workout = (S.workout + 1) % 5; }
   if (['shower', 'laundry', 'water_refill', 'groceries', 'mail'].includes(k)) S.last[k] = now;
   if (k === 'groceries') for (const s of SUPPLIES) delete S.supplies[s];
-  if (b.t === 'sleep' && b.poi) { S.nights.push({ poi: b.poi, t: now }); msg = 'Night logged. Rotation updated.'; }
+  if (b.t === 'sleep' && b.poi && !b.confirmed) { S.nights.push({ poi: b.poi, t: now }); msg = 'Night logged. Rotation updated.'; }
   save();
   const fn = () => { Object.assign(b, JSON.parse(prev)); if (!JSON.parse(prev).s1) delete b.s1; S.last = prevS.last; S.workout = prevS.workout; S.nights.length = prevS.nights; S.log.length = prevS.log; };
   return silent ? null : { msg, fn };
@@ -499,6 +525,7 @@ A.clearDay = () => { const d = S.days[sel]; delete S.days[sel]; save(); closeShe
 // ---------- block sheet
 A.openBlock = ({ id }) => openSheet(() => blockSheet(id));
 function blockSheet(id) {
+  if (findBlock(id).b?.t === 'sleep') return nightSheet(id);
   const { day, b, i } = findBlock(id);
   if (!b) return sheetHead('Gone') + '<p class="muted">This block was removed.</p>';
   const def = BT[b.t], rows = flow(day), r = rows.find(x => x.b === b) || {}, p = b.poi && P[b.poi];
@@ -528,6 +555,85 @@ function blockSheet(id) {
   }
   return h;
 }
+let reconOpen = null;
+function prevPoint(day, b) {
+  let pt = dayOrigin(day).pt;
+  for (const x of day.blocks) { if (x === b) break; if (x.st === 'skip' || x.t === 'carofc') continue; const q = blockPoint(x); if (q) pt = q; }
+  return pt;
+}
+function nightSheet(id) {
+  const { day, b } = findBlock(id), rows = flow(day), r = rows.find(x => x.b === b) || {};
+  const from = prevPoint(day, b), tg = (b.recon || []).filter(x => P[x.poi]);
+  let h = sheetHead('🌙 Night spot', `${dayLabel(day.date)}${r.s ? ' · arrive ~' + fmtTime(r.s) : ''}`);
+  if (b.confirmed && b.poi) {
+    const p = P[b.poi];
+    h += `<div class="card"><div class="row"><div class="grow"><b>✓ ${esc(p.n)}</b><div class="sub">${esc((lotChip(p) || [''])[0])} · ${esc(p.city || '')}</div></div></div>
+      <div class="blk-acts"><button class="btn sm primary" data-a="nav" data-id="${p.id}">Directions</button><button class="btn sm" data-a="openPlace" data-id="${p.id}" data-t="sleep">Info</button><button class="btn sm ghost" data-a="nightChange" data-blk="${id}">Change spot</button></div></div>`;
+  }
+  h += `<h2>Recon targets</h2>`;
+  if (tg.length) {
+    h += `<div class="list">${tg.map(x => {
+      const p = P[x.poi], mi = hav(from, ptOf(p));
+      const st = x.st === 'good' ? chip('✓ Good', 'ok') : x.st === 'bad' ? chip('✗ ' + (x.why || []).map(k => OBS_TAGS[k]?.[0].replace(/^\S+\s/, '')).join(', '), 'bad') : chip('To check');
+      return `<div class="place" style="display:block"><div class="row"><div class="grow"><div class="nm">${esc(p.n)}</div><div class="meta">${esc(p.city || '')} · ${fmtMi(mi)}</div></div>
+        <button class="btn sm ghost" data-a="reconToggle" data-blk="${id}" data-id="${p.id}">✕</button></div>
+        <div class="chips" style="margin-top:6px">${st} ${placeChips(p, 'sleep', r.s)}</div>
+        <div class="blk-acts"><button class="btn sm" data-a="nav" data-id="${p.id}">Go</button><button class="btn sm primary" data-a="reconGood" data-blk="${id}" data-id="${p.id}">✓ Good, sleep here</button><button class="btn sm" data-a="reconBad" data-blk="${id}" data-id="${p.id}">✗ Bad</button></div>
+        ${reconOpen === p.id ? `<div class="chips" style="margin-top:8px">${['noparking', 'small', 'vibe', 'security', 'signs', 'bright', 'noisy', 'people'].map(k => `<button class="chip ${x.why?.includes(k) ? 'bad' : ''}" data-a="reconWhy" data-blk="${id}" data-id="${p.id}" data-k="${k}">${OBS_TAGS[k][0]}</button>`).join('')}</div>` : ''}</div>`;
+    }).join('')}</div>`;
+    if (tg.some(x => x.st === 'todo')) h += `<button class="btn big primary" data-a="reconNext" data-blk="${id}" style="margin-top:10px">▶ Recon next (nearest unchecked)</button>`;
+  } else h += `<p class="note">Add 2–3 spots to check before you commit.</p>`;
+  h += `<p class="note">On recon: signs, lot size, where cars park, lighting, security patrols, vibe. Know a spot's good? Confirm it straight away.</p>`;
+  const opts = nightOptions(from, r.s || Date.now(), from).sort((a, z) => a.mi - z.mi).slice(0, 25);
+  h += `<h2>All options nearby · ${opts.length}</h2><div class="list">${opts.map(o => {
+    const inT = tg.some(x => x.poi === o.p.id);
+    return placeRow({ ...o, at: r.s }, 'sleep', `<button class="btn sm ${inT ? '' : 'primary'}" data-a="reconToggle" data-blk="${id}" data-id="${o.p.id}">${inT ? '✓ Target' : '+ Recon'}</button><button class="btn sm ghost" data-a="nightConfirm" data-blk="${id}" data-id="${o.p.id}">Confirm</button>`);
+  }).join('') || '<div class="empty">No night spots in the data near here yet.</div>'}</div>
+  <a class="btn big ghost" style="margin-top:10px" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent('iOverlander ' + (zoneOfPoint(from)?.n || ''))}">Check iOverlander reports for this area</a>`;
+  return h;
+}
+function confirmNight(blk, id) {
+  const { day, b } = findBlock(blk);
+  b.recon ||= [];
+  let x = b.recon.find(x => x.poi === id);
+  if (!x) b.recon.push(x = { poi: id });
+  x.st = 'good'; b.poi = id; b.confirmed = true; b.pinned = true;
+  S.nights = S.nights.filter(n => n.day !== day.date);
+  S.nights.push({ poi: id, t: Date.now(), day: day.date });
+  save(); closeSheet(true); toast('Night spot: ' + P[id].n);
+}
+A.reconGood = ({ blk, id }) => confirmNight(blk, id);
+A.nightConfirm = ({ blk, id }) => confirmNight(blk, id);
+A.reconToggle = ({ blk, id }) => {
+  const { b } = findBlock(blk); b.recon ||= [];
+  const i = b.recon.findIndex(x => x.poi === id);
+  if (i >= 0) b.recon.splice(i, 1); else b.recon.push({ poi: id, st: 'todo' });
+  save(); refresh();
+};
+A.reconBad = ({ id }) => { reconOpen = reconOpen === id ? null : id; refresh(); };
+A.reconWhy = ({ blk, id, k }) => {
+  const { day, b } = findBlock(blk), x = b.recon.find(x => x.poi === id);
+  x.st = 'bad'; x.why ||= [];
+  if (!x.why.includes(k)) { x.why.push(k); S.obs.push({ id: uid(), poi: id, t: Date.now(), tags: [k] }); }
+  if (b.poi === id) { b.poi = null; b.confirmed = false; S.nights = S.nights.filter(n => n.day !== day.date); }
+  save(); refresh(); toast('Noted: ' + OBS_TAGS[k][0]);
+};
+A.reconNext = ({ blk }) => {
+  const { b } = findBlock(blk), from = S.loc || here();
+  const next = (b.recon || []).filter(x => x.st === 'todo' && P[x.poi]).sort((a, z) => hav(from, ptOf(P[a.poi])) - hav(from, ptOf(P[z.poi])))[0];
+  if (!next) return toast('Nothing left to check. Add targets from the options.');
+  navigate([destOf(P[next.poi])]);
+};
+A.nightChange = ({ blk }) => { const { day, b } = findBlock(blk); b.confirmed = false; b.poi = null; S.nights = S.nights.filter(n => n.day !== day.date); save(); refresh(); };
+// add a spot to tonight's recon list from anywhere (lists, place sheets)
+A.reconQuick = ({ id }) => {
+  const d = today(), day = S.days[d] ||= { date: d, startMin: new Date().getHours() * 60, blocks: [] };
+  let b = day.blocks.find(x => x.t === 'sleep');
+  if (!b) day.blocks.push(b = mkBlock('sleep'));
+  b.recon ||= [];
+  if (!b.recon.some(x => x.poi === id)) b.recon.push({ poi: id, st: 'todo' });
+  save(); refresh(); toast('Added to tonight\'s recon list');
+};
 A.blockMenu = ({ id }) => openSheet(() => {
   const { day, b } = findBlock(id);
   return sheetHead(esc(blockTitle(b)), 'Block options') + `<div class="stack">
@@ -583,6 +689,7 @@ A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b
 const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'panera', 'library', 'carofc', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
 A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
 A.addBlock = ({ t, poi, dur, next, auto }) => {
+  if (t === 'sleep' && poi) return A.reconQuick({ id: poi });
   if (t === 'deep' && !poi && !auto) return A.devPick();
   const date = sel;
   const day = S.days[date] ||= { date, startMin: date === today() ? new Date().getHours() * 60 + new Date().getMinutes() : 480, blocks: [] };

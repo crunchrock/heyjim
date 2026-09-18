@@ -6,7 +6,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const MIN = 60000, HOUR = 3600000, DAY = 86400000;
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const pad = n => String(n).padStart(2, '0');
-const lc = s => (/^Panera/.test(s) ? s : s[0].toLowerCase() + s.slice(1));
+const lc = s => (/^(Panera|DoorDash)/.test(s) ? s : s[0].toLowerCase() + s.slice(1));
 const round5 = m => Math.max(5, Math.round(m / 5) * 5);
 
 function fmtClock(min) {
@@ -235,7 +235,8 @@ const OBS_TAGS = {
   signal: ['📶 Good signal', 1], nosignal: ['📵 Bad signal', -1], outlets: ['🔌 Outlets', 1], shade: ['🌳 Shade', 1],
   freepark: ['🅿️ Free parking', 1], paidpark: ['💲 Paid parking', -1], crowded: ['👥 Crowded', -1], closed: ['🚫 Closed', -2],
   slept: ['😴 Slept well', 1], knock: ['🚨 Knock / moved on', -2], noisy: ['🔊 Noisy', -1], bright: ['💡 Too bright', -1],
-  security: ['👮 Security patrol', -1], again: ['🔁 Would return', 1],
+  security: ['👮 Security patrolling', -2], again: ['🔁 Would return', 1],
+  noparking: ['🅿️ No good parking', -2], small: ['📏 Too small / tight', -1], vibe: ['😬 Bad vibe', -2], signs: ['🚫 No-overnight signs', -3], people: ['👀 Sketchy people', -2],
 };
 function obsFor(id) { return S.obs.filter(o => o.poi === id); }
 function obsScore(id) {
@@ -289,7 +290,7 @@ const DEV_KINDS = [
   ['water', '🌊', 'Car office by the water', p => isWater(p), 120, 3],
   ['cafe', '☕', 'Local cafés', p => isCafe(p), 150, 3],
   ['panera', '🥖', 'Panera: outlets + Sip Club', p => isPanera(p), 180, 2],
-  ['library', '📚', 'Libraries', p => isLibrary(p), 150, 0],
+  ['library', '📚', 'Libraries', p => isLibrary(p), 150, -6],
   ['pf', '🏋️', 'Car office at a PF lot, then lift + shower', p => !!p.caps.gym, 120, 0],
   ['food', '🍜', 'Eat + laptop', p => isRestaurant(p), 105, -2],
   ['bar', '🍺', 'Bars / social spots', p => isSocial(p), 120, -2],
@@ -314,7 +315,7 @@ const BT = {
   library: { n: 'Library', ic: '📚', dur: 180, log: 'dev', m: isLibrary, b: () => 0, caps: ['work_indoor'], alts: ['cafe', 'panera', 'water_work'], hint: 'Free, quiet, Wi-Fi + outlets. Libraries close early (often 5–8p): check the time.' },
   office: { n: 'Panera or library', ic: '🔌', dur: 180, log: 'dev', m: isOffice, b: p => (/panera/i.test(p.n) ? 4 : p.sc === 'library' ? 2 : 0), caps: ['work_indoor'], hint: 'Panera / library: power + Wi-Fi. Do builds, downloads, uploads here.' },
   deep: { n: 'Dev session', ic: '🎮', dur: 150, log: 'dev', m: p => !!devKind(p), b: p => { const k = devKind(p); return k[5] + (k[0] === 'water' ? wfBonus(p) / 2 : 0); }, caps: [], hint: 'Pick any spot that works today: the water, a café, Panera, a library, a restaurant, a bar, or your car at the PF lot.' },
-  light: { n: 'Admin / quick tasks', ic: '📋', dur: 60, log: 'dev', m: p => isWork(p) || isWater(p), b: p => (isWater(p) ? wfBonus(p) / 2 : 0), caps: ['work_indoor', 'work_outdoors'], hint: 'Notes, email, small tasks.' },
+  light: { n: 'Admin / quick tasks', ic: '📋', dur: 60, log: 'dev', m: p => !!devKind(p) && !isLibrary(p), b: p => (isWater(p) ? wfBonus(p) / 2 : 0), caps: ['work_indoor', 'work_outdoors'], hint: 'Notes, email, small tasks.' },
   dash: { n: 'DoorDash', ic: '🚗', dur: 210, log: 'dash', m: p => !!p._dd || p.tags.includes('door_dash') || p.c === 'doordash_cluster', b: p => (p._dd ? 5 + (p._dd.score || 0) / 20 : 0), caps: [], hint: 'One peak block. Don\'t chase red zones 20 miles away.' },
   gym: { n: 'Gym + shower', ic: '🏋️', dur: 80, log: 'gym', m: hasCap('gym'), b: p => (is247(p) ? 3 : 0), caps: ['gym', 'shower'], hint: '' },
   shower: { n: 'Shower', ic: '🚿', dur: 30, log: 'shower', m: p => p.caps.shower || p.am.includes('shower'), b: p => (p.caps.shower ? 2 : 0), caps: ['shower'], hint: 'Outdoor beach showers count too.' },
@@ -348,7 +349,7 @@ function sleepBonus(p) {
 // Distance dominates; closed places sink but stay visible (labeled with when they open); nothing past maxMi.
 // `anchor` keeps a day's blocks in its zone so plans don't drift town to town without a Travel block.
 const MAX_MI = { fun: 70, social: 60, sleep: 40 };
-function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi } = {}) {
+function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi, adj } = {}) {
   const def = BT[type];
   if (!def?.m) return [];
   if (dur == null) dur = def.dur;
@@ -372,9 +373,38 @@ function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi 
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) s -= 40;
     if (pt.approx) s -= 2;
     if (avoid?.has(p.id)) s -= 14;
+    if (adj) s += adj(p);
     out.push({ p, s, mi, f, approx: !!pt.approx });
   }
   return out.sort((a, b) => b.s - a.s);
+}
+
+// ---------- night spots: several recon targets of different kinds, nearest first
+const lotKind = p => p._ov?.ty || (p.caps.tent_camp ? 'camp' : p.caps.paid_lodging ? 'hotel' : 'other');
+function nightOptions(from, at, anchor) {
+  // tonight's hours matter: a PF open all night means restrooms + light; closed overnight means lot only
+  return rank('sleep', { from, at, dur: 0, anchor, maxMi: 25, adj: p => { const n = nightChip(p, at); return n?.[1] === 'ok' ? 3 : p.caps.gym && n?.[0] === 'Closed overnight' ? -4 : 0; } });
+}
+function pickRecon(b, from, at, anchor) {
+  const keep = (b.recon || []).filter(x => x.st !== 'todo');
+  const kinds = new Set(), out = [];
+  for (const o of nightOptions(from, at, anchor)) {
+    if (keep.some(x => x.poi === o.p.id) || obsScore(o.p.id) < -1) continue;
+    const k = lotKind(o.p);
+    if (kinds.has(k)) continue;
+    kinds.add(k); out.push(o);
+    if (out.length >= 3) break;
+  }
+  return [...keep, ...out.sort((a, z) => a.mi - z.mi).map(o => ({ poi: o.p.id, st: 'todo' }))];
+}
+// is the place open overnight on that night? (PF 24h Mon–Thu vs closing 9p Fri matters for restrooms)
+function nightChip(p, ts = Date.now()) {
+  if (!p.h) return null;
+  const d = new Date(ts); d.setHours(23, 30, 0, 0);
+  const st = hoursState(p, d);
+  if (st.k === '24h' || (st.k === 'open' && st.left >= 300)) return ['Open all night', 'ok'];
+  if (st.k === 'open') return ['Open till ' + fmtClock(23 * 60 + 30 + st.left), ''];
+  return st.k === 'closed' ? ['Closed overnight', ''] : null;
 }
 
 // ---------- day model
@@ -389,15 +419,15 @@ const WORKOUTS = [
 // water / café / Panera-library / car office. "type:minutes@HH:MM" pins a start time (e.g. DoorDash peak).
 const TEMPLATES = [
   { id: 'balanced', n: 'Balanced creative day', d: 'Water work → café → food → Panera → PF → car office', b: ['water_work:120', 'cafe:150', 'meal:45', 'panera:150', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'max', n: 'Big game day', d: 'Water break → café → food → water work → Panera → PF → car office', b: ['water_s:60', 'cafe:150', 'meal:45', 'water_work:120', 'panera:180', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'nomad', n: 'Beach nomad', d: 'Half a day working on the water → food → Panera → PF', b: ['water_l:240', 'meal:45', 'panera:150', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'cash', n: 'Cash day', d: 'Water work → café → DoorDash 5–8 → PF → car office', b: ['water_work:120', 'cafe:150', 'meal:45', 'dash:180@17:00', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'lunchdash', n: 'Lunch dash day', d: 'DoorDash 11–2 → food → water work → Panera → PF', b: ['dash:180@11:00', 'meal:45', 'water_work:120', 'panera:150', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'library', n: 'Library day', d: 'Water work → library → food → water break → PF → car office', b: ['water_work:120', 'library:180', 'meal:45', 'water_s:75', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'max', n: 'Big game day', d: 'Water break → dev session → food → water work → Panera → PF → car office', b: ['water_s:60', 'deep:150', 'meal:45', 'water_work:120', 'panera:180', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'nomad', n: 'Beach nomad', d: 'Half a day working on the water → food → dev session → PF', b: ['water_l:240', 'meal:45', 'deep:150', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'cash', n: 'Cash day', d: 'Water work → dev session → DoorDash 5–8 → PF → car office', b: ['water_work:120', 'deep:150', 'meal:45', 'dash:180@17:00', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'lunchdash', n: 'Lunch dash day', d: 'DoorDash 11–2 → food → water work → dev session → PF', b: ['dash:180@11:00', 'meal:45', 'water_work:120', 'deep:150', 'gym', 'carofc:120', 'sleep'] },
   { id: 'joy', n: 'Joy day', d: 'Long water → explore → good meal → café → PF', b: ['water_l:180', 'fun:120', 'meal:60', 'cafe:120', 'gym', 'sleep'] },
-  { id: 'grill', n: 'Grill night', d: 'Water work → café → Panera → grill dinner by the water → PF', b: ['water_work:120', 'cafe:150', 'panera:120', 'grill:90', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'move', n: 'Moving day', d: 'Café → travel → water work in the new zone → PF', b: ['water_s:60', 'cafe:150', 'travel', 'water_work:120', 'gym', 'carofc:120', 'sleep'] },
-  { id: 'car', n: 'Car day', d: '2h car work → water work → food → café → PF', b: ['car:120', 'water_work:120', 'meal:45', 'cafe:120', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'grill', n: 'Grill night', d: 'Water work → café → dev session → grill dinner by the water → PF', b: ['water_work:120', 'cafe:150', 'deep:120', 'grill:90', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'move', n: 'Moving day', d: 'Dev session → travel → water work in the new zone → PF', b: ['water_s:60', 'deep:150', 'travel', 'water_work:120', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'car', n: 'Car day', d: '2h car work → water work → food → dev session → PF', b: ['car:120', 'water_work:120', 'meal:45', 'deep:150', 'gym', 'carofc:120', 'sleep'] },
+  { id: 'library', n: 'Library day', d: 'Water work → library → food → water break → PF → car office', b: ['water_work:120', 'library:180', 'meal:45', 'water_s:75', 'gym', 'carofc:120', 'sleep'] },
   { id: 'tired', n: 'Easy reset', d: 'PF + shower → good food → water break → early night', b: ['gym', 'meal:60', 'water_s:90', 'sleep'] },
   { id: 'blank', n: 'Blank', d: 'Start empty and add blocks', b: ['sleep'] },
 ];
@@ -458,10 +488,12 @@ function nextZone(dir, from = here()) {
 }
 function nextSleep(day, b) {
   const i = day.blocks.indexOf(b);
-  return day.blocks.slice(i + 1).find(x => x.t === 'sleep' && x.st !== 'skip' && x.poi) || null;
+  return day.blocks.slice(i + 1).find(x => x.t === 'sleep' && x.st !== 'skip' && blockPoint(x)) || null;
 }
+const blockKind = b => ({ water_s: 'water', water_work: 'water', water_l: 'water', cafe: 'cafe', panera: 'panera', library: 'library', carofc: 'car' })[b.t] || (b.t === 'deep' && b.poi && P[b.poi] ? devKind(P[b.poi])?.[0] : null);
 function blockPoint(b) {
   if (b.t === 'travel') return b.toZone && Z[b.toZone] ? { lat: Z[b.toZone].lat, lng: Z[b.toZone].lng, zone: b.toZone } : null;
+  if (b.t === 'sleep' && !b.poi) { const x = (b.recon || []).find(x => x.st !== 'bad' && P[x.poi]); return x ? ptOf(P[x.poi]) : null; }
   return b.poi && P[b.poi] ? ptOf(P[b.poi]) : null;
 }
 // where a day begins: today = GPS / chosen zone; future days = the previous day's last stop (usually the sleep spot)
@@ -472,7 +504,7 @@ function dayOrigin(day) {
     if (!prev) continue;
     for (let j = prev.blocks.length - 1; j >= 0; j--) {
       const b = prev.blocks[j], pt = b.st !== 'skip' && blockPoint(b);
-      if (pt) return { pt, label: b.poi ? P[b.poi].n : Z[b.toZone].n, fromPrev: true };
+      if (pt) return { pt, label: b.poi ? P[b.poi].n : b.t === 'sleep' ? 'last night’s spot area' : Z[b.toZone]?.n || 'yesterday’s last stop', fromPrev: true };
     }
   }
   return { pt: here(), label: 'current area' };
@@ -482,7 +514,8 @@ function flow(day, assign) {
   if (!day) return [];
   const now = Date.now(), isToday = day.date === today(), clamp = day.date <= today();
   let t = dateTs(day.date, day.startMin ?? 480), from = dayOrigin(day).pt, anchor = from, prevPoi = null, prevType = null;
-  const usedIndoor = new Set();
+  const usedIndoor = new Set(), usedKinds = new Set(), usedPois = new Set();
+  let prevKind = null;
   const rows = [];
   for (const b of day.blocks) {
     const r = { b, warn: [] };
@@ -493,10 +526,14 @@ function flow(day, assign) {
       if (!b.durSet) b.dur = to ? round5(r.miles * 1.3 / 55 * 60 + 10) : 60;
       if (to && r.miles < 3) r.warn.push('Already in this zone');
     }
-    if (assign && b.st === 'plan' && BT[b.t].m && (assign === 'all' ? !b.pinned : !b.poi)) {
+    if (b.t === 'sleep') {
+      if (assign && b.st === 'plan' && !b.confirmed && (assign === 'all' || !b.recon?.length)) b.recon = pickRecon(b, from, Math.max(t, clamp ? now : 0), anchor);
+    } else if (assign && b.st === 'plan' && BT[b.t].m && (assign === 'all' ? !b.pinned : !b.poi)) {
       const at = Math.max(t, clamp ? now : 0) + 10 * MIN;
       const avoid = WORK_T.has(b.t) ? usedIndoor : null; // no marathons: each indoor work venue once a day
-      const best = rank(b.t, { from, at, dur: b.dur, anchor, avoid })[0];
+      // mix spots across the day: a dev session goes somewhere new, ideally a different kind of place than the last block
+      const adj = /^water/.test(b.t) ? p => (usedPois.has(p.id) ? -8 : 0) : b.t === 'deep' ? p => (usedPois.has(p.id) ? -14 : 0) + (devKind(p)[0] === prevKind ? -10 : usedKinds.has(devKind(p)[0]) ? -4 : 0) : null;
+      const best = rank(b.t, { from, at, dur: b.dur, anchor, avoid, adj })[0];
       // everyday blocks stay local; if the only match is far away, leave it open and say where the nearest is
       const tooFar = best && LOCAL_T.has(b.t) && hav(anchor, ptOf(best.p)) > 15;
       b.poi = best && !tooFar ? best.p.id : null;
@@ -519,6 +556,8 @@ function flow(day, assign) {
     if (b.t === 'travel' && dest) anchor = dest;
     if (b.poi) prevPoi = b.poi;
     if (b.poi && WORK_T.has(b.t)) usedIndoor.add(b.poi);
+    const k = blockKind(b); if (k) usedKinds.add(k);
+    prevKind = k; if (b.poi) usedPois.add(b.poi);
     prevType = b.t;
     rows.push(r);
   }
@@ -534,7 +573,8 @@ function blockWarnings(b, r) {
     else if (r.fit.k === 'short') r.warn.push((sunsetGate ? 'Gate closes around sunset: ' : '') + r.fit.txt + ` of ${fmtDur(b.dur)}`);
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) r.warn.push('Listed as temporarily closed');
     if (b.t === 'sleep') { const ln = lastNight(p.id); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + fmtAgo(ln) + '. Rotate?'); }
-  } else if (BT[b.t].m && b.t !== 'travel') r.warn.push(b.far && P[b.far] ? `No ${lc(BT[b.t].n)} within 15 mi (nearest: ${P[b.far].n}, ${P[b.far].city || ''})` : `No ${lc(BT[b.t].n)} in the data near here`);
+  } else if (b.t === 'sleep') { if (!b.recon?.length) r.warn.push('No night spot options yet'); }
+  else if (BT[b.t].m && b.t !== 'travel') r.warn.push(b.far && P[b.far] ? `No ${lc(BT[b.t].n)} within 15 mi (nearest: ${P[b.far].n}, ${P[b.far].city || ''})` : `No ${lc(BT[b.t].n)} in the data near here`);
   if (b.t === 'dash') {
     const z = zoneOfPoint((p && ptOf(p)) || here()), wins = (D.dd[z?.id] || []).flatMap(m => m.win || []);
     const s = new Date(r.s), sm = s.getHours() * 60 + s.getMinutes(), em = sm + b.dur;
