@@ -7,7 +7,7 @@ const ctx = vm.createContext({ console, crypto: globalThis.crypto, TextEncoder, 
   fetch: async () => ({ ok: true, arrayBuffer: async () => fs.readFileSync('docs/data.enc') }), setTimeout, clearTimeout });
 vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, P, fetchEnc, keyFromPassword, decryptData, indexData, newDay, flow, getDay, today };', ctx);
 const $ = ctx.__, secret = JSON.parse(fs.readFileSync('build/secret.json', 'utf8'));
-const buf = await $.fetchEnc(); $.indexData(await $.decryptData(buf, await $.keyFromPassword(secret.password, buf)));
+const buf = await $.fetchEnc(); $.indexData(await $.decryptData(buf, await $.keyFromPassword(secret.password, buf))); vm.runInContext('D.sync = null', ctx);
 const spots = (process.argv[2] || 'Ormond:29.285:-81.055,PalmCoast:29.55:-81.21').split(',').map(x => x.split(':'));
 const tpls = (process.argv[3] || 'balanced,max,cash,grill').split(',');
 const hm = ts => { const d = new Date(ts); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };

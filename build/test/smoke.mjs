@@ -15,7 +15,7 @@ const buf = await $.fetchEnc();
 const data = await $.decryptData(buf, await $.keyFromPassword(secret.password, buf));
 let bad = false; try { await $.decryptData(buf, await $.keyFromPassword('wrong', buf)); bad = true; } catch {}
 console.log('decrypt ok; wrong password rejected:', !bad);
-$.indexData(data);
+$.indexData(data); vm.runInContext('D.sync = null', ctx);
 $.S.loc = { lat: 29.2847, lng: -81.0553, t: Date.now() }; // Ormond Beach
 for (const t of Object.keys($.BT)) {
   if (!$.BT[t].m) continue;

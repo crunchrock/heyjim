@@ -8,7 +8,7 @@ const ctx = vm.createContext({ console, crypto: globalThis.crypto, TextEncoder, 
   fetch: async () => ({ ok: true, arrayBuffer: async () => fs.readFileSync('docs/data.enc') }), setTimeout, clearTimeout });
 vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, P, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, BT };', ctx);
 const $ = ctx.__, secret = JSON.parse(fs.readFileSync('build/secret.json', 'utf8'));
-const buf = await $.fetchEnc(); $.indexData(await $.decryptData(buf, await $.keyFromPassword(secret.password, buf)));
+const buf = await $.fetchEnc(); $.indexData(await $.decryptData(buf, await $.keyFromPassword(secret.password, buf))); vm.runInContext('D.sync = null', ctx);
 const spots = { Tavares: [28.804, -81.726], Sanford: [28.80, -81.27], Ormond: [29.285, -81.055], PalmCoast: [29.55, -81.21], StAug: [29.89, -81.31], Pensacola: [30.42, -87.22], Tampa: [27.95, -82.46] };
 const times = { '08:00': 8, '13:00': 13, '19:00': 19, '23:00': 23 };
 const tiles = ['restroom', 'water', 'shower', 'meal', 'office', 'sleep', 'groc', 'laundry', 'water_s', 'cafe', 'grill', 'car', 'dash'];

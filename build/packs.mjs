@@ -15,7 +15,16 @@ export function loadPacks(root) {
   const maps = Object.fromEntries(COLLECTIONS.map(c => [c, new Map()]));
   for (const f of files) {
     const b = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-    for (const c of COLLECTIONS) for (const r of b[c] || []) maps[c].set(r.id ?? JSON.stringify(r), r);
+    for (const c of COLLECTIONS) for (const r of b[c] || []) {
+      const k = r.id ?? JSON.stringify(r), prev = maps[c].get(k);
+      // upsert: a later pack's non-null facts win, but it never erases known facts with null
+      if (prev && typeof prev === 'object') {
+        const merged = { ...prev };
+        for (const [f, v] of Object.entries(r)) if (v != null && !(Array.isArray(v) && !v.length && prev[f]?.length)) merged[f] = v;
+        if (prev.source_ids && r.source_ids) merged.source_ids = [...new Set([...prev.source_ids, ...r.source_ids])];
+        maps[c].set(k, merged);
+      } else maps[c].set(k, r);
+    }
     if (b.manifest) {
       out.manifest.version = b.manifest.version || out.manifest.version;
       out.manifest.research_date = [out.manifest.research_date, b.manifest.research_date].filter(Boolean).sort().pop();

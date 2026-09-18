@@ -6,7 +6,7 @@ const ctx = vm.createContext({ console, crypto: globalThis.crypto, TextEncoder, 
   fetch: async () => ({ ok: true, arrayBuffer: async () => fs.readFileSync('docs/data.enc') }), setTimeout, clearTimeout });
 vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, P, fetchEnc, keyFromPassword, decryptData, indexData, pickRecon, nightOptions, nightChip, lotKind };', ctx);
 const $ = ctx.__, secret = JSON.parse(fs.readFileSync('build/secret.json', 'utf8'));
-const buf = await $.fetchEnc(); $.indexData(await $.decryptData(buf, await $.keyFromPassword(secret.password, buf)));
+const buf = await $.fetchEnc(); $.indexData(await $.decryptData(buf, await $.keyFromPassword(secret.password, buf))); vm.runInContext('D.sync = null', ctx);
 for (const [n, lat, lng] of [['Ormond', 29.285, -81.055], ['PalmCoast', 29.55, -81.21], ['Tavares', 28.804, -81.726], ['StAug', 29.89, -81.31]]) {
   const from = { lat, lng }, at = new Date().setHours(21, 0, 0, 0);
   const recon = $.pickRecon({}, from, at, from).map(x => $.P[x.poi].n);
