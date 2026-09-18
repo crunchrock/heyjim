@@ -28,6 +28,12 @@ Hours strings: `"07:00-21:00"`, split ranges `"11:00-14:30;17:00-22:00"`, overni
 
 **doordash_markets[]**: `id`, `zone_id`, `name`, `recommended_windows[]` ("11:00-14:00"), `avoid_windows[]`, `target_subzones[] {name, poi_id}` (the hotspot restaurants the Dash block sends you to), `scores.overall`, `confidence`, `advantages[]`, `problems[]`, `demographics.median_household_income_usd`, `window_basis`.
 
+**Food value (on food POIs)**: `food_value {cuisine, asian, price_level (1–4 = $–$$$$), typical_meal_usd, rating, rating_count, rating_source, rating_checked, known_for_cheap, cheap_evidence}`. The app ranks meals by value: high rating + cheap + known for cheap wins, Asian gets a nudge, $$$ is flagged "Pricey".
+
+**Bars (category `social`)**: `bar_details {kind: dive|hipster_dive|barcade|craft_beer|cocktail|live_music, vibe, games, food, price_level, rating, rating_count, rating_source}` and `bar_specials [{label, days: ["tuesday",…], start "HH:MM", end "HH:MM", items: ["$5 Old Fashioned", …], posted_date (when the source set/updated it), checked_date, confidence: official|social_post|third_party|review_mention, source_id}]`. Always record posted/checked dates; the app shows them. Bar rules in the app: Mon–Thu surface specials, Fri/Sat plain dive bars are fine, never suggest bars on Sunday.
+
+**poi_patches[]**: `[{id, ...fields}]` shallow-merges fields into an existing place without replacing it (e.g. add `food_value` ratings to a restaurant from an older pack).
+
 **sources[]**: `id`, `url`, `title`, `publisher`, `retrieved_date`. Every record's `source_ids` must resolve here.
 
 ## Checklist for a new pack

@@ -220,6 +220,20 @@ function placeChips(p, type, ts, dur) {
   const tc = trustChip(p, type && BT[type]?.caps?.length ? BT[type].caps : null);
   if (type !== 'sleep' && tc[1]) out.push(chip(tc[0], tc[1]));
   const sk = (!type || type === 'sleep') && sketchChip(p); if (sk) out.push(chip(sk[0], sk[1]));
+  if (p.fv) {
+    const f = p.fv;
+    if (f.pl) out.push(chip('$'.repeat(f.pl), f.pl >= 3 ? 'warn' : ''));
+    if (f.r) out.push(chip(`★${f.r}${f.rc ? ' (' + (f.rc >= 1000 ? (f.rc / 1000).toFixed(1) + 'k' : f.rc) + ')' : ''}`, f.r >= 4.5 ? 'ok' : ''));
+    if (f.cheap) out.push(chip('Known for cheap', 'ok'));
+    if (f.pl >= 3) out.push(chip('Pricey', 'warn'));
+  }
+  if (p.sp?.length || p.bd) {
+    const sp = specialsAt(p, ts || Date.now());
+    if (sp.now) out.push(chip('🍹 Now: ' + (sp.now.items || [sp.now.l]).slice(0, 2).join(', '), 'acc'));
+    else if (sp.today.length) out.push(chip('Tonight: ' + sp.today.map(x => (x.s ? fmtClock(+x.s.split(':')[0] * 60 + +x.s.split(':')[1]) + ' ' : '') + (x.items?.[0] || x.l)).join(' · '), 'acc'));
+    else if (p.sp?.length) out.push(chip('Specials ' + [...new Set(p.sp.map(x => dayNames(x.d)))].join(', ')));
+    if (p.bd?.k) out.push(chip(p.bd.k.replace(/_/g, ' ')));
+  }
   for (const [t, c] of wfChips(p).slice(0, type && /water|grill/.test(type) ? 4 : 2)) out.push(chip(t, c));
   const ln = lastNight(p.id); if (ln && Date.now() - ln < 10 * DAY) out.push(chip('Slept here ' + fmtAgo(ln), 'warn'));
   if (S.fav[p.id]) out.push(chip('★ Saved', 'acc'));
@@ -304,7 +318,7 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['meal', 'Food'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ['restroom', 'Restroom'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
+  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['meal', 'Food'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars']] : []), ['restroom', 'Restroom'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
   return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
@@ -331,6 +345,9 @@ function suggest() {
   if (h >= 9 && h < 20) out.push(['panera', 'Powered work session']);
   if ((h >= 11 && h < 14) || (h >= 17 && h < 20.5)) out.push(['meal', 'Meal time']);
   if (h >= 16 && h < 19.5) out.push(['grill', 'Grill dinner by the water']);
+  const dow = now.getDay();
+  if (dow >= 1 && dow <= 4 && h >= 15 && h < 21) { const b = rank('social', { at: Date.now() })[0]; if (b && b.mi <= 15 && specialsAt(b.p).today.length) out.push(['social', specialsAt(b.p).now ? 'Specials on right now' : 'Specials tonight']); }
+  if ((dow === 5 || dow === 6) && h >= 20) out.push(['social', 'Dive bar night']);
   if (h >= 20 || h < 3) out.push(['sleep', 'Line up tonight’s spot']);
   if (age('water_refill') > 72) out.push(['water', 'Jug refill due']);
   if (age('laundry') > 168) out.push(['laundry', 'Laundry due']);
@@ -812,6 +829,9 @@ function placeSheet(id, type, blk) {
   if (p._camp) h += campHtml(p._camp);
   if (p._mail) h += mailHtml(p);
   if (p._food) h += foodHtml(p._food);
+  if (p.fv && (p.fv.r || p.fv.pl)) h += `<h2>Value</h2><div class="card"><div class="chips">${p.fv.cu ? chip(p.fv.cu) : ''} ${p.fv.pl ? chip('$'.repeat(p.fv.pl)) : ''} ${p.fv.usd ? chip('~$' + p.fv.usd + ' a meal', 'ok') : ''} ${p.fv.r ? chip(`★${p.fv.r} · ${p.fv.rc || '?'} reviews`, 'ok') : ''}</div>
+    ${p.fv.ev ? `<p class="note">${esc(p.fv.ev)}</p>` : ''}<p class="tiny faint">${esc(p.fv.rs || 'Rating')} checked ${esc(p.fv.rck || '?')}</p></div>`;
+  if (p.bd || p.sp?.length) h += barHtml(p);
   if (p._rec) h += recHtml(p._rec);
   if (p.tn) h += `<h2>Notes</h2><p class="note">${esc(p.tn)}</p>`;
   if (p.capn?.length) h += `<h2>What it's good for</h2>${p.capn.map(([c, n, cond]) => {
@@ -845,6 +865,15 @@ function mailHtml(p) {
   return `<h2>Mail</h2><div class="card"><div class="chips">${chip((m.ty || '').replace(/_/g, ' '))} ${m.gd ? chip('General Delivery listed', 'ok') : ''} ${m.gdc ? chip('GD confirmed', 'ok') : ''} ${m.hold ? chip('Hold at location', 'ok') : ''}</div>
     ${addr ? `<pre class="note" style="font:600 14px/1.5 ui-monospace,monospace;margin:10px 0">${esc(addr)}</pre><button class="btn sm" data-a="copy" data-v="${esc(addr)}">Copy address</button>` : ''}
     ${m.ask ? `<p class="note">${esc(m.ask)}</p>` : ''}${m.pick ? `<p class="note">Pickup: ${esc(typeof m.pick === 'string' ? m.pick : JSON.stringify(m.pick))}</p>` : ''}${m.ph ? `<a class="btn sm" href="tel:${esc(m.ph.replace(/[^\d+]/g, ''))}">Call ${esc(m.ph)}</a>` : ''}</div>`;
+}
+function barHtml(p) {
+  const b = p.bd || {}, fmtD = d => (d ? new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null);
+  const t = x => (x ? fmtClock(+x.split(':')[0] * 60 + +x.split(':')[1]) : '');
+  return `<h2>Bar</h2><div class="card"><div class="chips">${b.k ? chip(b.k.replace(/_/g, ' ')) : ''} ${b.pl ? chip('$'.repeat(b.pl)) : ''} ${b.r ? chip(`★${b.r}${b.rc ? ' · ' + b.rc : ''}`, 'ok') : ''}</div>
+    ${b.vibe ? `<p class="note">${esc(b.vibe)}</p>` : ''}${b.games ? `<p class="note">Games: ${esc(b.games)}</p>` : ''}${b.food ? `<p class="note">Food: ${esc(b.food)}</p>` : ''}</div>
+    <h2>Specials</h2>${p.sp?.length ? p.sp.map(x => `<div class="card"><b>${esc(x.l || 'Special')}</b> <span class="muted small">· ${dayNames(x.d)}${x.s ? ' ' + t(x.s) + (x.e ? '–' + t(x.e) : '') : ''}</span>
+      ${x.items?.length ? `<div class="note">${x.items.map(esc).join(' · ')}</div>` : ''}
+      <div class="tiny faint" style="margin-top:4px">${x.posted ? 'Posted ' + fmtD(x.posted) + ' · ' : 'Post date unknown · '}checked ${fmtD(x.checked) || '?'}${x.conf ? ' · ' + x.conf.replace(/_/g, ' ') : ''}${x.src && D.sources[x.src] ? ` · <a href="${esc(D.sources[x.src][1])}" target="_blank" rel="noopener">source</a>` : ''}</div></div>`).join('') : '<p class="note">No current specials found. Worth asking the bartender.</p>'}`;
 }
 function foodHtml(f) {
   return `<h2>Food</h2><div class="card"><div class="chips">${chip(f.k || 'food')} ${f.ramen ? chip('Ramen', 'acc') : ''} ${f.buf ? chip('Buffet', 'acc') : ''} ${f.ayce ? chip('All you can eat', 'acc') : ''} ${f.min ? chip('from $' + f.min, 'ok') : ''}</div>

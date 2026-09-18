@@ -25,6 +25,12 @@ export function loadPacks(root) {
     out.packs.push(f);
   }
   for (const c of COLLECTIONS) out[c] = [...maps[c].values()];
+  // poi_patches: [{id, ...fields}] shallow-merge fields into an existing place (e.g. add ratings/prices)
+  const byId = new Map(out.pois.map(p => [p.id, p]));
+  for (const f of files) {
+    const b = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    for (const pt of b.poi_patches || []) { const p = byId.get(pt.id); if (p) Object.assign(p, { ...pt, id: p.id }); }
+  }
   const profPath = path.join(dir, '_profile.json');
   out.profile = fs.existsSync(profPath) ? JSON.parse(fs.readFileSync(profPath, 'utf8')) : {};
   return out;

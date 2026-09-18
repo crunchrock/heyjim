@@ -296,6 +296,37 @@ const DEV_KINDS = [
   ['bar', '🍺', 'Bars / social spots', p => isSocial(p), 120, -2],
 ];
 const devKind = p => DEV_KINDS.find(k => k[3](p));
+// cheap + loved beats fancy: rating, price level, "known for cheap", Asian preference
+function valueScore(p) {
+  const f = p.fv; if (!f) return (p._food ? 1 : 0);
+  let s = 0;
+  if (f.r != null) s += f.r >= 4.7 ? 4 : f.r >= 4.5 ? 3 : f.r >= 4.2 ? 1 : f.r < 4 ? -2 : 0;
+  if (f.rc != null && f.rc < 40) s -= 1;
+  if (f.pl != null) s += { 1: 4, 2: 1, 3: -5, 4: -8 }[f.pl] || 0;
+  if (f.cheap) s += 3;
+  if (f.asian) s += 2;
+  if (p.sc === 'fast_food') s -= 1;
+  return s;
+}
+// bar specials on a given moment (in the bar's timezone): {today: [...], now: special|null}
+function specialsAt(p, ts = Date.now()) {
+  if (!p.sp?.length) return { today: [], now: null };
+  const { dow, min } = tzParts(new Date(ts), p.ct);
+  const today = p.sp.filter(x => !x.d?.length || x.d.includes(dow));
+  const hm = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  const now = today.find(x => x.s && x.e && min >= hm(x.s) && min < (hm(x.e) <= hm(x.s) ? hm(x.e) + 1440 : hm(x.e))) || null;
+  return { today, now };
+}
+const dayNames = ds => { const n = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; return ds?.length ? ds.map(d => n[d]).join('/') : 'Daily'; };
+function barBonus(p, at) {
+  const dow = new Date(at).getDay(), sp = specialsAt(p, at);
+  let s = sp.now ? 8 : sp.today.length ? 4 : 0;
+  const k = p.bd?.k || p.sc || '';
+  if (/dive|barcade|hipster/.test(k)) s += dow === 5 || dow === 6 ? 4 : 2;
+  if (p.bd?.r >= 4.5) s += 2;
+  if (dow === 0) s -= 10; // not on a Sunday night
+  return s;
+}
 const isOffice = p => isWork(p) && (/panera/i.test(p.n) || p.sc === 'library' || p.sc === 'chain_cafe');
 const isWater = p => p.c === 'waterfront' || !!p.wf;
 const hasCap = (...cs) => p => cs.some(c => p.caps[c]);
@@ -319,7 +350,7 @@ const BT = {
   dash: { n: 'DoorDash', ic: '🚗', dur: 210, log: 'dash', m: p => !!p._dd || p.tags.includes('door_dash') || p.c === 'doordash_cluster', b: p => (p._dd ? 5 + (p._dd.score || 0) / 20 : 0), caps: [], hint: 'One peak block. Don\'t chase red zones 20 miles away.' },
   gym: { n: 'Gym + shower', ic: '🏋️', dur: 80, log: 'gym', m: hasCap('gym'), b: p => (is247(p) ? 3 : 0), caps: ['gym', 'shower'], hint: '' },
   shower: { n: 'Shower', ic: '🚿', dur: 30, log: 'shower', m: p => p.caps.shower || p.am.includes('shower'), b: p => (p.caps.shower ? 2 : 0), caps: ['shower'], hint: 'Outdoor beach showers count too.' },
-  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => p.c === 'food' && !/walmart|grocery/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat), b: p => (p._food ? 3 : 0) + (p.caps.ramen ? 2 : 0) + (/cava|chipotle/i.test(p.n) ? 2 : 0), caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
+  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => p.c === 'food' && !/walmart|grocery/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat), b: p => valueScore(p) + (p.caps.ramen ? 1 : 0), caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
   grill: { n: 'Grill dinner', ic: '🔥', dur: 90, log: 'water', m: p => p.caps.public_grill || p.am.includes('grill'), b: p => wfBonus(p), caps: ['public_grill'], hint: 'Charcoal, foil, lighter. Check fire rules.' },
   car: { n: 'Car work', ic: '🔧', dur: 120, log: 'car', m: hasCap('auto_parts', 'repair_support', 'auto_service', 'loan_tools'), b: p => (p.caps.loan_tools || p.x.tools ? 3 : 0) + (p.x.lotRepair ? 3 : 0), caps: ['auto_parts', 'loan_tools', 'repair_support'], hint: 'Parts run + lot work. Test drive after.' },
   water: { n: 'Water refill', ic: '💧', dur: 15, log: 'water_refill', m: hasCap('buy_drinking_water', 'water_source_candidate'), b: () => 0, caps: ['buy_drinking_water', 'water_source_candidate'], hint: '3-gal jug at the refill machine (~$1.50).' },
@@ -327,7 +358,7 @@ const BT = {
   laundry: { n: 'Laundry', ic: '🧺', dur: 100, log: 'laundry', m: hasCap('laundry'), b: () => 0, caps: ['laundry'], hint: 'Bring the laptop: 90 min of light work.' },
   mail: { n: 'Mail pickup', ic: '📬', dur: 20, log: 'mail', m: hasCap('mail'), b: p => (p._mail?.gd ? 3 : 0), caps: ['mail'], hint: 'Bring ID. General Delivery holds ~30 days.' },
   fun: { n: 'Explore', ic: '🌿', dur: 120, m: p => p.c === 'fun' || p.c === 'camping' && p.tags.includes('joy'), b: p => (p.tags.includes('creative_retreat') ? 2 : 0), caps: ['recreation'], hint: 'Springs, trails, oddities.' },
-  social: { n: 'Social / bar', ic: '🍺', dur: 120, m: p => p.c === 'social' || p.tags.includes('social'), b: () => 0, caps: [], hint: 'Done driving for the night first.' },
+  social: { n: 'Bar night', ic: '🍺', dur: 120, m: p => p.c === 'social' || p.tags.includes('social'), b: (p, at) => barBonus(p, at), caps: [], hint: 'Done driving for the night first.' },
   restroom: { n: 'Restroom', ic: '🚻', dur: 10, m: hasCap('restroom', 'restroom_candidate'), b: p => (is247(p) ? 2 : 0), caps: ['restroom', 'restroom_candidate'], hint: '' },
   travel: { n: 'Travel', ic: '🛣️', dur: 60, hint: 'Move to a new zone. Duration follows the distance.' },
   sleep: { n: 'Night spot', ic: '🌙', dur: 0, m: p => p.caps.sleep_candidate || (S.settings.tent && p.caps.tent_camp) || p.caps.paid_lodging, b: sleepBonus, caps: ['sleep_candidate', 'tent_camp', 'paid_lodging'], hint: 'Rotate spots. Check iOverlander’s newest check-ins as the tiebreaker.' },
@@ -369,7 +400,7 @@ function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi,
     if (type !== 'sleep') s += f.k === 'ok' ? 5 : f.k === 'unk' ? 0 : f.k === 'short' ? -3 - 12 * (1 - f.cover) : -12;
     const e = evOf(p, def.caps.length ? def.caps : null);
     s += e === 'd' ? 3 : e === 'r' ? 2 : 0;
-    s += def.b(p) + (S.fav[p.id] ? 8 : 0) + obsScore(p.id) * 3;
+    s += def.b(p, at) + (S.fav[p.id] ? 8 : 0) + obsScore(p.id) * 3;
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) s -= 40;
     if (pt.approx) s -= 2;
     if (avoid?.has(p.id)) s -= 14;
@@ -575,6 +606,11 @@ function blockWarnings(b, r) {
     if (b.t === 'sleep') { const ln = lastNight(p.id); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + fmtAgo(ln) + '. Rotate?'); }
   } else if (b.t === 'sleep') { if (!b.recon?.length) r.warn.push('No night spot options yet'); }
   else if (BT[b.t].m && b.t !== 'travel') r.warn.push(b.far && P[b.far] ? `No ${lc(BT[b.t].n)} within 15 mi (nearest: ${P[b.far].n}, ${P[b.far].city || ''})` : `No ${lc(BT[b.t].n)} in the data near here`);
+  if (b.t === 'social') {
+    const dow = new Date(r.s).getDay();
+    if (dow === 0) r.warn.push('Sunday night: skip the bars and rest?');
+    else if (p && dow >= 1 && dow <= 4 && !specialsAt(p, r.s).today.length) r.warn.push('No known specials here tonight');
+  }
   if (b.t === 'dash') {
     const z = zoneOfPoint((p && ptOf(p)) || here()), wins = (D.dd[z?.id] || []).flatMap(m => m.win || []);
     const s = new Date(r.s), sm = s.getHours() * 60 + s.getMinutes(), em = sm + b.dur;
