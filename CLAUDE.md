@@ -1,64 +1,114 @@
-# Hey Jim — agent guide
+# Hey Jim: guide for agents working on this project
 
-Personal PWA for one user (iPhone 14 Pro, home-screen web app) who lives on the road in Florida: game dev + DoorDash, sleeps in the car, showers at Planet Fitness, works from waterfronts / cafés / Panera / libraries. The app plans days as **blocks** (water, café, office, deep work, DoorDash, gym+shower, car, meal, grill, travel, sleep…) and auto-picks the best real place for each block from researched **data packs**.
+Hey Jim is a personal iPhone home-screen web app (PWA) for one user, "Crunch". He lives out of his car (Acura MDX) on the Florida coast. He's an indie game developer who also DoorDashes, showers at Planet Fitness, and works from waterfronts, cafés, kava bars, Panera and his car. The app plans his days as **blocks** (water work, café, dev session, DoorDash, gym + shower, meals, travel, night spot…). It picks real places for each block from researched **data packs**: open at that time, close by, and cheap and good. It then hands the route to Google Maps.
 
-Live: https://crunchrock.github.io/heyjim/ (GitHub Pages, `main` branch, `/docs` folder). Repo is public; the data is not.
+- Live app: https://crunchrock.github.io/heyjim/ (GitHub Pages serves `main:/docs`). This repo is **public**; the data is encrypted.
+- His synced state (plans, notes, logs) lives in the **private** repo `crunchrock/heyjim-data`.
+- Everything runs from this folder on his Windows PC (Node 24, Git Bash, `gh` logged in as crunchrock).
+
+## Golden rules
+
+1. **Never commit** `packs/`, `build/secret.json`, `build/geocodes.json`, or `build/test/ui/out/` (all gitignored). Never write the password or the sync token into tracked files, commit messages or chat output.
+2. **Keep `salt` in `build/secret.json` stable.** Changing it logs his phone out.
+3. **Never hand-edit `state.json` in heyjim-data**, and never let a test touch it. Tests disable sync (`D.sync = null`) and the UI harness blocks `api.github.com`.
+4. **Respect his planning rules** (next section). They came from direct, repeated feedback.
+5. Before pushing, always run: `node build/build.mjs && node build/test/smoke.mjs`. After pushing, his phone gets the update on the next open-close-open (service worker).
+6. Honest data only: unknown stays `null`. Never invent ratings, prices, hours or specials.
+
+## His planning rules (don't regress these)
+
+- **Work sessions are 2–4h** (2h minimum), and the work stepper moves in 30 min steps. He works at the water (laptop battery + hotspot + inverter), in cafés, kava/tea bars, B&N/Books-A-Million cafés and Panera (outlets + Sip Club), and in the evening from the car at his night spot. Water work, Car office, Agentic chill session and Bedtime dev all count as dev time.
+- **Never auto-plan an inhumane day** (e.g. 8h at a library). Libraries are penalized and never recommended; he picks them himself occasionally. An auto-built day uses each indoor venue at most once and rotates kinds of spots.
+- **Venue types are not interchangeable.** Panera ≠ library ≠ café. Never silently swap one for another. If none exists within 15 mi, leave the block empty with "No X within 15 mi (nearest: …)" and offer buttons (another type / "Drive to it anyway").
+- **Everyday blocks stay local.** A day stays in its zone until a Travel (or Storage) block moves it.
+- **Night spot = recon.** Offer several spots of different kinds (Walmart, PF, Cracker Barrel, truck stop, hotel lot, camping) sorted by distance, with tonight's overnight hours. He scouts, then confirms ✓ or marks ✗ with reasons. Bad marks down-rank that spot later.
+- **Food:** cheap and highly rated beats fancy. Asian gets a nudge; $$$ is flagged "Pricey". **Bars:** Mon–Thu surface dated specials, Fri/Sat any good dive bar, never Sunday night. **Groceries:** Trader Joe's > Sprouts/Publix > Walmart > Whole Foods. **Gas:** Murphy USA first.
+- **Design:** Airbnb-like, calm warm daytime theme, dark at night (auto by sunset). **No decorative accent lines or borders.** Keep it uncluttered; effectiveness beats polish.
 
 ## Layout
 
 ```
-packs/            PRIVATE, gitignored. Research data packs (JSON). Source of truth for places.
-  florida_mobile_dev_agent_bundle_v3.json   first pack (536 places, 40 zones)
-  _profile.json   private user profile (name for mail, lifestyle context). Not a pack.
+packs/                     PRIVATE (gitignored). Source of truth for places.
+  florida_mobile_dev_agent_bundle_v3.json   base research (40 zones)
+  2026-09-18-*.json        added packs (gap-fill, overnight, cheap eats, bars, groceries/vape, gas/malls, gaps, vape, corrections)
+  _profile.json            private profile: name for mail, lifestyle context (used in research prompts), private places (storage unit)
+  _RESEARCH_PROMPT_gaps.md ready-to-paste ChatGPT Pro prompt template for filling gaps
 build/
-  build.mjs       packs → slim JSON → gzip → AES-GCM encrypt → docs/data.enc; icons; bumps sw.js VERSION
-  packs.mjs       loads + merges packs (by id, later filename wins)
-  geocode.mjs     fills missing coordinates → build/geocodes.json (Census batch, then Nominatim ≤1 req/s)
-  secret.json     PRIVATE, gitignored. {"password", "salt"}. Keep the salt stable or the phone gets logged out.
-  test/smoke.mjs  headless test: decrypts data.enc and exercises core.js planner logic
-docs/             the published site (this folder IS the website — not documentation)
-  index.html, styles.css
-  core.js         logic: storage, crypto, hours parsing, sun times, ranking (rank), block types (BT),
-                  templates, multi-day planner (S.days, newDay, flow, dayOrigin, blockWarnings), directions, weather
-  app.js          UI: tabs (Today / Map / Places / Week), bottom sheets, click delegation (data-a → A.*, data-c → C.*)
-  sw.js           offline cache; VERSION rewritten by build
-  data.enc        encrypted dataset (safe to publish)
-DATA_PACKS.md     schema + research prompt for new packs (ChatGPT Pro workers)
+  build.mjs                packs → slim JSON → gzip → AES-GCM encrypt → docs/data.enc; icons; bumps sw.js VERSION
+  packs.mjs                loads and merges packs (field-level upsert by id; poi_patches)
+  geocode.mjs              fills missing coordinates → build/geocodes.json (Census batch, then Nominatim ≤1 req/s; lock file = one instance)
+  secret.json              PRIVATE: {password, salt, sync_token, sync_repo}
+  test/smoke.mjs           decrypts data.enc, exercises the planner (run before every push)
+  test/scan.mjs days.mjs night.mjs food.mjs   planner quality probes: print what the app would pick at real places and times
+  test/ui/                 screenshot harness for the real UI at iPhone size (see Testing)
+docs/                      THE WEBSITE (not documentation). No build step for UI code.
+  index.html styles.css    shell + CSS variables (light/dark)
+  core.js                  logic: storage, sync, crypto, geo, sun, hours, ranking, block types, templates, planner, directions, weather
+  app.js                   UI: tabs Today / Map / Places / Week, bottom sheets, click delegation
+  sw.js                    offline cache (VERSION rewritten by build)
+  data.enc                 encrypted dataset (safe to publish)
+DATA_PACKS.md              the data-pack contract (fields the build reads)
+README.md                  human overview
 ```
 
-## Commands
+## Common jobs
 
-```bash
-node build/geocode.mjs        # only when new packs add places without coordinates (slow: Nominatim 1 req/s; run ONE instance)
-node build/build.mjs          # always after changing packs/ or docs/*
-node build/test/smoke.mjs     # sanity check
-git add -A && git commit -m "..." && git push   # Pages redeploys in ~1 min; phone picks it up on next open
-```
+### Add a data pack (the most common request)
+1. Save the pack JSON in `packs/`, named to sort after existing packs (e.g. `2026-10-02-georgia-coast.json`). Validate it first: it parses, ids are unique, every `source_id` and `poi_id` resolves, `zone_id`s exist (or the pack adds the zone), and the hours syntax is valid. The validation snippet used for the gaps pack is in git history; write your own if needed.
+2. `node build/geocode.mjs` (resumable; skips known ids; can take minutes because of Nominatim throttling).
+3. `node build/build.mjs && node build/test/smoke.mjs`, then spot-check with `node build/test/food.mjs meal`, `night.mjs`, `days.mjs`, or the UI harness.
+4. Commit and push. Merge semantics: same `id` in a later pack **upserts** (non-null fields win; nulls never erase known facts; `source_ids` union). `poi_patches: [{id, ...fields}]` patches existing places without restating them.
 
-Never commit `packs/`, `build/secret.json`, or `build/geocodes.json` (see .gitignore). Never print the password into committed files.
+### Research new data
+- **New area:** the app's Places tab → "Need an area that isn't here?" copies a research prompt (`packPrompt` in core.js, including his private context) for ChatGPT Pro deep research. It also appears automatically when his GPS is more than 45 mi from every zone.
+- **Gaps in covered areas:** adapt `packs/_RESEARCH_PROMPT_gaps.md`.
+- **Claude research agents:** give each agent exactly one output file, allow at most 2–3 sub-agents, and have only the parent write the file (parallel forks once raced on the same file). WebSearch has a per-session budget that runs out. Google Maps, Yelp and YellowPages block automated fetches. What has worked: official chain locators, OpenStreetMap (Photon `photon.komoot.io`, Nominatim ≤1 req/s; Overpass was unreachable), restaurantji/TripAdvisor mirrors, and official bar/restaurant sites for dated specials.
 
-## How the app works (read before changing it)
+### Reconcile his synced data ("rebuild with my notes")
+`gh api repos/crunchrock/heyjim-data/contents/state.json --jq .content | base64 -d` gives his state. Useful signals: `obs` (place notes and tags, including night-spot recon failures like `signs`, `security`, `noparking`, plus `cheap`/`good`/`view`), `fav`, `avoid`, `nights`, `wishes` (areas he asked about). Fold durable facts into a new `packs/<date>-from-user.json` as `poi_patches` (e.g. traveler_notes, amenities, parking free). Never write state.json.
 
-- **Security model**: intentionally light. Data is PBKDF2(310k)+AES-GCM encrypted; the app shell is public. After the first unlock the derived key is kept in localStorage, so the device stays unlocked. "Lock app" in Week › Backup clears it.
-- **User state** (`S`, localStorage `hj.state`): settings, `days` (date → {startMin, blocks[]}), `log` (time/dash entries), `obs` (append-only place notes, incl. night-spot recon reasons), `nights` (sleep rotation), `last` (upkeep timestamps), `fav`, `avoid`, `supplies`, `workout` index, `updatedAt`.
-- **Sync**: the app auto-saves `S` to the PRIVATE repo `crunchrock/heyjim-data` (`state.json`) via the GitHub contents API ~15s after changes and when backgrounded; it pulls on open. Append-only lists merge by id, so conflicts don't lose notes. The fine-grained token (contents R/W on heyjim-data only) lives in `build/secret.json` → `sync_token` and ships only inside the encrypted `data.enc`. Read his state: `gh api repos/crunchrock/heyjim-data/contents/state.json --jq .content | base64 -d`. On "rebuild", reconcile useful bits into packs (e.g. a `poi_patches` pack from his `obs` / `avoid`: bad night spots, great work spots), but never edit state.json by hand while the phone may be writing.
-- **Blocks**: `BT` in core.js defines each block type: matcher `m(poi)`, bonus `b(poi)`, default duration, what it logs. `rank(type, {from, at, dur})` scores places by distance, hours fit at that time, evidence (Confirmed / Reported / Unconfirmed), user notes/favorites, and sleep rotation. `flow(day, assign)` walks a day: timing (clamped to now for today), drive legs, auto-assign places, and warnings (closed, gate closes at sunset, outside DoorDash windows, slept here recently).
-- **User's planning rules (from his feedback, keep them)**: work sessions are 2–4h (2h minimum); he works at the water (laptop battery + hotspot + inverter) and from the car in the evening ("Car office" at tonight's spot, after gym/shower); Water work and Car office count as dev time. Panera, library and café are NOT interchangeable: never silently swap venue types; if none is within 15 mi leave the block empty with "No X within 15 mi (nearest …)" and let him pick an alternative. Each indoor work venue at most once a day; everyday blocks stay local (`LOCAL_T`). Never auto-plan inhumane days (e.g. 8h at a library). "Dev session" is activity-first: a grouped picker of work spots (`DEV_KINDS`).
-- **Libraries are never favored** (DEV_KINDS bonus −6, "Library day" never recommended); he picks them occasionally himself. Dev sessions in templates rotate kinds of spots (water / café / Panera / restaurant / PF-lot car office) and never repeat a place in a day.
-- **Night spot = recon workflow**: the sleep block holds `recon` targets (`{poi, st: todo|good|bad, why[]}`), auto-seeded with 3 nearest of different lot kinds (`pickRecon`), preferring places open all night tonight (`nightChip`). He scouts ("Recon next" navigates to nearest unchecked), then ✓ confirms (sets `poi`, `confirmed`, logs the night for rotation) or ✗ marks bad with reasons (saved as place observations that down-rank it later). "Confirm" skips recon.
-- **Food / bars / errands**: meals rank by `valueScore` (rating + price level + known-for-cheap, Asian nudge, $$$ flagged "Pricey"). Places can carry dated `specials` (bars and meat-deal nights) shown with posted/checked dates; bars are ranked at their evening; Mon–Thu surface specials, Fri/Sat dive bars, never Sunday. Groceries prefer Trader Joe's > Sprouts/Publix > Walmart > Whole Foods; gas prefers Murphy USA (GasBuddy link for live prices). Work-spot kinds (`DEV_KINDS`): water, café, kava/tea (kratom-first excluded), B&N/BAM cafés, Panera, library (penalized), PF-lot car office, malls/food courts, eat + laptop, bars. Cards show amenity icons (🚻 🅿️ 📶 🔌) via `amenIcons`.
-- **Research gaps**: `packs/_RESEARCH_PROMPT_gaps.md` is a ready ChatGPT Pro prompt for what automated research couldn't verify (used bookstores, vape ratings, more zones).
-- **Private places**: `packs/_profile.json` → `places[]` (e.g. his Public Storage unit, 4051 W 1st St / SR-46, Sanford) become `me_*` POIs inside the encrypted build. The rare "Storage unit run" block routes there from anywhere and re-anchors later blocks around it.
-- **Evening at your spot**: blocks with `night: 1` (Car office, Gaming / chill, Agentic chill session, Bedtime dev) happen at tonight's night spot; placeless blocks (Nap, Car meal) happen wherever he's parked. The Add-block palette is grouped (`PALETTE`).
-- **Editing**: block cards have × (delete, undo toast), a ⋮⋮ drag handle (pointer-event reorder), and an inline −/+ duration stepper.
-- **Days**: today starts at GPS (or a chosen "planning" zone); future days start from the previous day's last stop (usually the sleep spot). Day key rolls over at 4am.
-- **Hours**: per-day strings `"HH:MM-HH:MM"`, `;` for split ranges, overnight like `16:00-02:00`, tokens `sunrise|sunset|dawn|dusk|daylight`, `closed`, or null = unknown (never treated as open or closed). Central-time zones via `ct`.
-- **Directions**: `navigate([...])` → Google Maps app URL scheme (`comgooglemaps://?daddr=A+to:B+to:C`) for multi-stop, or web/Apple Maps per setting. Destinations use "name, address" strings, not coordinates.
-- **Coverage**: if GPS is >45 mi from every zone the app says so and offers a copyable research prompt (`packPrompt`) for a new pack.
-- Style: vanilla JS, no framework, no build step for the UI. Compact code, template-string rendering, CSS variables with light/dark themes (auto by sunrise/sunset). Design brief from the user: Airbnb-like, calm warm daytime theme, dark at night, **no decorative accent lines/borders**.
+### Add a feature or block type
+1. **Block type:** add an entry to `BT` in core.js: `{ n, ic, dur, m(poi) matcher, b(poi, at) bonus, caps, hint, log?, night?, alts? }`. Placeless blocks omit `m`. `night: 1` means the block happens at tonight's night spot. `log` can be `'dev' | 'water' | 'car' | 'gym' | 'dash'` or an array.
+2. Add it to the `PALETTE` groups in app.js. Optionally add it to `findHtml` pills, the Places `cats`, `MAP_FILTERS`, and the sets `LOCAL_T` (stays near the day's area), `WORK_T` (indoor work venue), `WORK_BLOCKS` (30 min stepper).
+3. If it's a new kind of work spot, add it to `DEV_KINDS` (order = display order; the last number is the ranking bonus).
+4. Run the probes and screenshots, then build, smoke, push. Update this file if you add a rule he asked for.
 
-## Adding data (the usual future task)
+## How it works
 
-1. Put the new pack JSON in `packs/` (see DATA_PACKS.md for the contract). Later files override earlier ones by `id`.
-2. `node build/geocode.mjs` if its places lack coordinates, then `node build/build.mjs`, `node build/test/smoke.mjs`.
-3. Spot-check a new zone in the app (Places tab lists zones in route order), commit, push.
+**Data pipeline.** `packs.mjs` merges all packs. `build.mjs` then:
+- slims every POI to short keys: `n` name, `c` category, `sc` subcategory, `a` address, `h` hours [Sun..Sat], `ct` Central time, `caps` {cap: d|r|i evidence}, `am` amenities, `wf` waterfront facts, `fv` food value, `bd` bar details, `sp` specials, `x` extras incl. `kratom`/`laptop`;
+- attaches overlays keyed by poi: `ovn` overnight, `camp`, `mail`, `rec`, `food`; plus `dd` DoorDash markets, `zones`, `sources`, `profile`, and `sync` settings;
+- injects private places from `_profile.json`;
+- then gzips, encrypts (PBKDF2-SHA256 310k + AES-GCM) and writes `docs/data.enc`.
+
+**Runtime** (`core.js`, then `app.js`):
+- *Unlock.* On the first password entry the derived key is kept in localStorage, so the device stays unlocked. "Lock app" in Week clears it.
+- *Ranking.* `rank(type, {from, at, dur, anchor, avoid, adj, maxMi})` scores places. Inputs: distance (closer strongly preferred, hard cap 45 mi by default), whether it's open for the block's time window (`fit` / `hoursState`: tz-aware, sunrise/sunset tokens, overnight ranges), evidence, the block's bonus, favorites and his notes (`obsScore`), and anchor distance.
+- *Days.* `S.days[date] = {startMin, blocks[]}`, where a block is `{id, t, dur, st plan|active|done|skip, poi, pinned, at (pinned start), recon[] (sleep), toZone (travel)}`. `flow(day, assign)` walks a day: times (clamped to now for today), drive legs, auto-assignment (`'missing'` / `'all'`), variety rules, the 15 mi locality rule, and warnings. Future days start from the previous day's last stop. The day key rolls over at 4 am.
+- *Templates.* `TEMPLATES` specs look like `"type:minutes@HH:MM"`. `newDay` trims templates to the hours left; `tplScore` ranks them by time of day and local availability.
+- *Night spots.* `pickRecon`, `nightOptions` and `nightChip` pick and label candidates; `lotKind` / `LOT_TYPE` give the lot type.
+- *Directions.* `navigate([...])` builds a `comgooglemaps://?daddr=A+to:B` multi-stop link (or web / Apple Maps per his setting) from "name, address" strings.
+- *Weather and alerts.* Open-Meteo plus NWS alerts, cached; `wxInsights` gives car-sleeping and heat tips.
+
+**Sync.** `save()` stamps `S.updatedAt` and calls `syncSoon()`, which runs a PUT to heyjim-data about 15 s later (and right away when the app goes to the background). The app pulls on open. `mergeState` unions the append-only lists (`obs`, `log`, `nights`, `wishes`) by id, and on a 409 it pulls, merges and retries. `loc` is never committed. The token is a fine-grained PAT with Contents R/W on heyjim-data only, stored in `build/secret.json` and shipped only inside `data.enc`.
+
+**UI** (`app.js`). Click delegation: `data-a="name"` runs `A.name(dataset)`, and `data-c` routes change events to `C.name`. `render()` redraws the current tab. Sheets are a stack (`openSheet(fn)` / `closeSheet`). Timeline cards have × (delete + undo), a ⋮⋮ drag handle (pointer events), an inline −/+ stepper, amenity icons (🚻 🅿️ 📶 🔌 from `amenIcons`) and warnings with Fix / switch-type buttons.
+
+## Testing
+
+- `node build/test/smoke.mjs`: must pass before every push.
+- Probes (read-only; sync disabled):
+  - `node build/test/days.mjs "Name:lat:lng,..." "tpl1,tpl2" [startHour]`: auto-built days
+  - `night.mjs`: recon picks
+  - `food.mjs <type>`: top picks for any block type
+  - `scan.mjs`: picks across towns and times
+- UI screenshots at 390×844: `node build/test/ui/mk.mjs` (after each build), then `build/test/ui/shot.sh <name> "reset=1&lat=..&lng=..&tpl=balanced&do=block&i=2"`. The PNG lands in `build/test/ui/out/`, and the query options are listed at the top of `shot.sh`. Headless Chrome's virtual clock can't finish real network calls; that's expected.
+
+## Gotchas learned the hard way
+
+- Five inland zones have no researched center; `build.mjs` computes centroids (with fallbacks). Code must never treat a null lat as 0 (that once rejected every geocode).
+- Run only ONE `geocode.mjs` at a time (Nominatim will 429). Census batch handles most street addresses.
+- Test VMs must set `D.sync = null`, or the sync timer keeps Node alive and could write to his repo.
+- Old saved days survive upgrades. `migrate()` in app.js re-plans them when rules change: bump `S.ver` and add the migration.
+- Windows CRLF warnings on commit are harmless. `comgooglemaps://` multi-stop links are untested on a real iPhone; the Week settings let him switch to Google web.
+- QuikTrip has almost no Florida presence (the first store opened near Tallahassee in 2026). Buc-ee's prohibits overnight parking. Rest areas have a 3-hour limit.

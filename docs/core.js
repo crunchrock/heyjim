@@ -727,26 +727,25 @@ function coverage(pt = S.loc) {
   return { ok: mi <= 45, zone: z, mi };
 }
 function packPrompt(area) {
-  const zones = D.zones.map(z => z.n).join('; ');
-  return `You are a research worker extending the "Hey Jim" Florida mobile-developer lifestyle dataset (current dataset v${D.v}, researched ${D.researched}).
+  const zones = D.zones.map(z => `${z.id} (${z.n})`).join('; ');
+  return `You are a research worker extending my "Hey Jim" Florida lifestyle dataset (current data v${D.v}, researched ${D.researched}).
 
 Target area: ${area}
 
-Produce ONE JSON data pack for this area in the SAME schema as the existing florida_mobile_dev_agent_bundle_v3.json (top-level collections: zones, pois, capabilities, overnight_candidates, camping, mail_options, recreation, food_options, meal_offers, doordash_markets, sources). Keep ids stable and unique: zone ids are kebab-case; poi ids are "<zone_id>_<slug>"; capability ids are "<poi_id>__<capability>". Every fact needs source_ids pointing into sources[] with url + retrieved_date. Unknown stays null (never guess). Give every POI a full street address and navigation.search_query ("Name, street, city, FL zip"); coordinates are welcome but optional.
+${D.profile?.context || 'I live on the road in Florida as a game developer and delivery driver.'}
 
-Existing zones (don't duplicate): ${zones}
+Return ONE downloadable JSON data pack. Real, currently open places only; unknown = null (never guess); every fact cites sources[] (url + retrieved_date).
+Top-level arrays: zones, pois, capabilities, overnight_candidates, camping, mail_options, doordash_markets, sources, research_gaps (and optional poi_patches).
+- zones[]: {id (kebab-case, new area only), name, region, center:{latitude,longitude}, route_order, timezone, recommended_stay_days:{min,max}, best_for[], weaknesses[]}. Existing zones (don't duplicate): ${zones}
+- pois[]: {id "<zone_id>_<slug>", zone_id, name, category (waterfront|work|gym|food|social|overnight_candidate|car_maintenance|camping|mail|fun|shop|life_support), subcategory, address "street, city, FL zip", city, state, postal_code, latitude, longitude, website, phone, hours {monday..sunday: "HH:MM-HH:MM" | "11:00-14:00;17:00-21:00" | "16:00-02:00" | "sunrise-sunset" | "closed" | null}, amenities[] (restroom, parking, grill, shade, pavilion, pier, boat_ramp, beach_access, shower, wifi…), parking {free, notes}, tags[], traveler_notes, navigation {search_query "Name, street, city, FL zip"}, source_ids[],
+  food_value {cuisine, asian, price_level 1-4, typical_meal_usd, rating, rating_count, rating_source, rating_checked, known_for_cheap, cheap_evidence} (ratings for ANY place),
+  specials [{label, days ["tuesday"], start "HH:MM", end "HH:MM", items ["$5 Old Fashioned"], posted_date, checked_date, confidence official|social_post|third_party|review_mention, source_id}] (bar specials, meat-deal nights),
+  bar_details {kind dive|hipster_dive|barcade|craft_beer|cocktail|live_music, vibe, games, food} (bars), work_details {wifi_advertised, outlets_confirmed, laptop_friendly, sells_kratom} (cafés/kava/tea)}
+- capabilities[]: {id "<poi_id>__<cap>", poi_id, zone_id, capability, evidence_level documented|reported|inferred, assessment_note, conditions[], source_ids[]}. Caps: work_indoor, work_outdoors, wifi, gym, shower, sleep_candidate, tent_camp, paid_lodging, meal, protein_food, groceries, buy_drinking_water, laundry, mail, auto_parts, loan_tools, public_grill, restroom, recreation, fuel, vape. Every POI needs ≥1.
+- overnight_candidates[] for car-sleep spots: {id, poi_id, zone_id, type walmart|planet_fitness|cracker_barrel|truck_stop|hotel_cluster|rest_area, status, gray_area, permission_status, notes, field_check[], assessment {priority inspect_first|alternative|extra_friction, rationale}}.
 
-${D.profile?.context || 'The user lives on the road in Florida as a game developer and delivery driver.'}
-For each new zone (a planning region ~15–30 mi across) research:
-- Waterfront car-office spots: causeways, boat ramps, bridges, piers, Intracoastal parks, beach lots. Priority: car parked close to the water, FREE parking, peaceful, views, restrooms, shade, public grills. Give hours (gates often close at sunset).
-- Work: independent cafés, Panera, libraries (hours, Wi-Fi, outlets).
-- Planet Fitness clubs (exact hours per day, 24/7 or not) for gym + shower.
-- Overnight car-sleep candidates (Walmart, Cracker Barrel, hotel clusters, truck stops, PF lots) with permission status, gray-area flags and recent traveler reports (iOverlander); tent/vehicle camping on public land.
-- Food: protein-heavy cheap meals, ramen, Chinese buffets, CAVA/Chipotle; Walmart for groceries + water refill machines.
-- Laundromats, USPS General Delivery offices, auto parts stores (loan-a-tool, lot repairs), DoorDash market windows.
-- Fun: springs, trails, oddities, flea markets, hipster dive bars and weird social spots.
-Hours format per day: "HH:MM-HH:MM", multiple ranges joined by ";", overnight like "16:00-02:00", sunrise/sunset/dawn/dusk tokens allowed, "closed", or null when unknown.
-Return only the JSON file (downloadable), plus a short list of research gaps.`;
+Per zone research: waterfront car-office spots (causeways, boat ramps, Intracoastal parks, beach lots: free parking, restrooms, shade, grills, gate hours); cafés, kava/tea bars (no kratom-first), Barnes & Noble / Books-A-Million cafés, Panera; Planet Fitness hours per day; 5+ overnight candidates (Walmart, Cracker Barrel, truck stops, hotel lots, PF lots, camping); cheap highly rated food (Asian first); dive bars with dated specials; Trader Joe's / Publix / Sprouts; laundromats; USPS General Delivery; auto parts (loan-a-tool); Murphy USA gas; springs, trails, oddities, big used bookstores.
+Return only the JSON file plus a short list of research gaps.`;
 }
 
 // ---------- logging
