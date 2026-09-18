@@ -233,7 +233,7 @@ function attentionHtml() {
   if (!list.length) return '';
   return `<h2>Worth doing now</h2><div class="list">${list.map(([t, why]) => {
     const r = rank(t)[0];
-    if (!r) return '';
+    if (!r || r.mi > 15) return '';
     const f = fit(r.p, Date.now(), BT[t].dur);
     return `<div class="place" data-a="openPlace" data-id="${r.p.id}" data-t="${t}"><span style="font-size:22px;width:28px">${BT[t].ic}</span>
       <div class="main"><div class="nm">${BT[t].n} <span class="muted small" style="font-weight:500">· ${esc(why)}</span></div>
@@ -242,7 +242,7 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['office', 'Wi-Fi + power'], ['sleep', 'Sleep spot'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['grill', 'Grill'], ['car', 'Auto parts']];
+  const items = [['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['panera', 'Panera'], ['library', 'Library'], ['sleep', 'Sleep spot'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['grill', 'Grill'], ['car', 'Auto parts']];
   return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
@@ -259,11 +259,13 @@ function suggest() {
   const age = k => (S.last[k] ? (Date.now() - S.last[k]) / HOUR : 999);
   if (age('shower') > 22) out.push(['gym', S.last.shower ? 'Last shower ' + fmtAgo(S.last.shower) : 'Lift + shower']);
   if (toSunset > 0.3 && toSunset < 2.3) out.push(['water_s', 'Sunset at ' + fmtTime(sun.set)]);
-  if (h >= 5 && h < 10) out.push(['water_s', 'Morning water block'], ['cafe', 'Café to start the day']);
+  if (h >= 5 && h < 9) out.push(['water_s', 'Morning at the water']);
   const dzs = D.dd[zoneOfPoint(here())?.id] || [];
   const inWin = dzs.some(m => (m.win || []).some(w => { const [a, b] = w.split('-').map(x => +x.split(':')[0] + +x.split(':')[1] / 60); return h >= a - 0.5 && h < b; }));
   if (inWin) out.push(['dash', 'DoorDash peak window']);
-  if (h >= 8 && h < 18) out.push(['office', 'Plugged-in work block']);
+  if (h >= 7 && toSunset > 2.3) out.push(['water_work', 'Work by the water']);
+  if (h >= 9 && h < 17) out.push(['cafe', 'Café session']);
+  if (h >= 9 && h < 20) out.push(['panera', 'Powered work session']);
   if ((h >= 11 && h < 14) || (h >= 17 && h < 20.5)) out.push(['meal', 'Meal time']);
   if (h >= 16 && h < 19.5) out.push(['grill', 'Grill dinner by the water']);
   if (h >= 20 || h < 3) out.push(['sleep', 'Line up tonight’s spot']);
@@ -297,7 +299,15 @@ function tplScore(tpl, date) {
   if (h < 10 && /water_l/.test(tpl.b.join())) s += 1;
   if (h >= 16 && tpl.id === 'tired') s += 2;
   if (h < 16 && tpl.id === 'cash' && (D.dd[zoneOfPoint(here())?.id] || []).length) s += 0.5;
+  // favor day types whose venues actually exist around here
+  for (const t of new Set(tpl.b.map(x => x.split(/[:@]/)[0]))) if (LOCAL_T.has(t) && !localAvail(t)) s -= 2;
   return s;
+}
+const availCache = {};
+function localAvail(t) {
+  const pt = here(), k = t + (pt.lat).toFixed(2) + (pt.lng).toFixed(2);
+  if (!(k in availCache)) { const r = rank(t, { dur: 0 })[0]; availCache[k] = !!r && r.mi <= 15; }
+  return availCache[k];
 }
 function dayHtml(date) {
   const day = getDay(date);
@@ -331,11 +341,14 @@ function blockTitle(b) {
 function blockHtml(r, day, isNext, isToday, prevPoi) {
   const b = r.b, def = BT[b.t], p = b.poi && P[b.poi];
   const cls = b.st === 'active' ? 'active' : b.st === 'done' ? 'done' : r.skip ? 'skipped' : '';
-  const leg = !r.skip && r.travel ? `<div class="travel">🚗 ${fmtDur(r.travel)} · ${fmtMi(r.miles)}</div>` : '';
+  const leg = (!r.skip && r.gap > 20 ? `<div class="travel">✨ Free ${fmtDur(r.gap)}${b.at != null ? ' before ' + BT[b.t].n.toLowerCase() + ' at ' + fmtClock(b.at) : ''}</div>` : '') + (!r.skip && r.travel ? `<div class="travel">🚗 ${fmtDur(r.travel)} · ${fmtMi(r.miles)}</div>` : '');
   let chips = '';
   if (p && b.st !== 'done' && !r.skip) chips = placeChips(p, b.t, r.s, b.t === 'sleep' ? 0 : b.dur);
   if (b.t === 'travel' && r.miles) chips = chip(fmtMi(r.miles) + ' ' + (Z[b.toZone] ? bearing(dayOrigin(day).pt, Z[b.toZone]) : ''), 'blue');
   const warns = (r.warn || []).map(w => `<div class="warnline">⚠️ ${esc(w)}${p && /Closed|closes|Gate/.test(w) ? ` <button class="btn sm" data-a="fixBlk" data-id="${b.id}">Fix</button>` : ''}</div>`).join('');
+  // no good match for this venue type nearby: let him pick what to do instead (never swapped silently)
+  const conv = b.st === 'plan' && BT[b.t].alts && (r.warn || []).some(w => /^Nearest|^No /.test(w))
+    ? `<div class="blk-acts">${BT[b.t].alts.filter(t => !isToday || localAvail(t)).map(t => `<button class="btn sm" data-a="convBlk" data-id="${b.id}" data-t="${t}">${BT[t].ic} ${BT[t].n} instead</button>`).join('')}${b.far && P[b.far] ? `<button class="btn sm ghost" data-a="pickPlace" data-blk="${b.id}" data-id="${b.far}">Drive to it anyway</button>` : ''}</div>` : '';
   let acts = '';
   if (isToday && b.st === 'active') acts = `<div class="blk-acts"><button class="btn sm primary" data-a="doneBlk" data-id="${b.id}">✓ Done</button><button class="btn sm" data-a="extend" data-id="${b.id}">+30m</button>${p ? `<button class="btn sm" data-a="nav" data-id="${p.id}">Directions</button>` : ''}</div>`;
   else if (isToday && isNext) acts = `<div class="blk-acts">${p || b.t === 'travel' ? `<button class="btn sm primary" data-a="goBlk" data-id="${b.id}">Go</button>` : ''}<button class="btn sm" data-a="startBlk" data-id="${b.id}">Start</button><button class="btn sm ghost" data-a="doneBlk" data-id="${b.id}">Done</button></div>`;
@@ -343,8 +356,8 @@ function blockHtml(r, day, isNext, isToday, prevPoi) {
   return leg + `<div class="blk ${cls}"><div class="blk-time">${time}</div>
     <div class="blk-body" data-a="openBlock" data-id="${b.id}">
       <div class="blk-title"><span class="ic">${def.ic}</span><span class="grow ell">${esc(blockTitle(b))}</span>${b.st === 'active' ? chip(r.over ? 'Over' : 'Now', 'acc') : ''}${b.st === 'done' ? chip('Done', 'ok') : ''}${r.skip ? chip('Skipped') : ''}</div>
-      ${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
-      ${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${warns}${acts}</div></div>`;
+      ${b.t === 'carofc' ? `<div class="blk-place muted">Wherever you're parked${prevPoi ? ' · ' + esc(P[prevPoi].n) : ''}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
+      ${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${warns}${conv}${acts}</div></div>`;
 }
 function findBlock(id) {
   for (const day of Object.values(S.days)) { const i = day.blocks.findIndex(b => b.id === id); if (i >= 0) return { day, b: day.blocks[i], i }; }
@@ -404,9 +417,11 @@ function finishBlock(b, silent) {
   const now = Date.now(), prev = JSON.stringify(b), prevS = { last: { ...S.last }, workout: S.workout, nights: S.nights.length, log: S.log.length };
   if (b.st !== 'active') b.s0 = now - b.dur * MIN;
   b.s1 = now; b.st = 'done';
-  const min = (b.s1 - b.s0) / MIN, k = BT[b.t].log;
+  const min = (b.s1 - b.s0) / MIN, ks = [].concat(BT[b.t].log || []), k = ks[0];
   let msg = BT[b.t].n + ' done';
-  if (k === 'dev' || k === 'water' || k === 'car') { logEntry(k, min); msg = `Logged ${fmtDur(min)} ${k === 'dev' ? 'game dev' : k === 'water' ? 'on the water' : 'car work'}`; }
+  const LBL = { dev: 'game dev', water: 'on the water', car: 'car work' };
+  const timed = ks.filter(x => LBL[x]);
+  if (timed.length) { timed.forEach(x => logEntry(x, min)); msg = `Logged ${fmtDur(min)} ${timed.map(x => LBL[x]).join(' + ')}`; }
   if (k === 'gym') { logEntry('gym', min); S.last.shower = now; msg = `${WORKOUTS[S.workout % 5].n} logged. Shower ✓`; S.workout = (S.workout + 1) % 5; }
   if (['shower', 'laundry', 'water_refill', 'groceries', 'mail'].includes(k)) S.last[k] = now;
   if (k === 'groceries') for (const s of SUPPLIES) delete S.supplies[s];
@@ -438,7 +453,7 @@ function blockSheet(id) {
   const def = BT[b.t], rows = flow(day), r = rows.find(x => x.b === b) || {}, p = b.poi && P[b.poi];
   const isToday = day.date === today();
   let h = sheetHead(`${def.ic} ${esc(blockTitle(b))}`, r.s ? `${dayLabel(day.date)} · ${fmtTime(r.s)}${b.t === 'sleep' ? '' : '–' + fmtTime(r.e)}` : dayLabel(day.date));
-  h += `<div class="row wrap" style="margin-bottom:10px">${b.t !== 'sleep' ? `<div class="dur"><button data-a="dur" data-id="${id}" data-v="-15">−</button><span>${fmtDur(b.dur)}</span><button data-a="dur" data-id="${id}" data-v="15">+</button></div>
+  h += `<div class="row wrap" style="margin-bottom:10px">${b.t !== 'sleep' ? `<div class="dur"><button data-a="dur" data-id="${id}" data-v="-${WORK_BLOCKS.has(b.t) ? 30 : 15}">−</button><span>${fmtDur(b.dur)}</span><button data-a="dur" data-id="${id}" data-v="${WORK_BLOCKS.has(b.t) ? 30 : 15}">+</button></div>
     ${b.t.startsWith('water') ? `<button class="btn sm" data-a="durSet" data-id="${id}" data-v="75">S</button><button class="btn sm" data-a="durSet" data-id="${id}" data-v="150">M</button><button class="btn sm" data-a="durSet" data-id="${id}" data-v="270">L</button>` : ''}` : ''}
     <span class="grow"></span><button class="btn sm" data-a="moveBlk" data-id="${id}" data-v="-1" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn sm" data-a="moveBlk" data-id="${id}" data-v="1" ${i === day.blocks.length - 1 ? 'disabled' : ''}>↓</button><button class="btn sm" data-a="blockMenu" data-id="${id}">•••</button></div>`;
   if (def.hint) h += `<p class="note">${esc(def.hint)}</p>`;
@@ -470,6 +485,7 @@ A.blockMenu = ({ id }) => openSheet(() => {
     <button class="btn big" data-a="dupBlk" data-id="${id}">Duplicate</button>
     <button class="btn big" data-a="delBlk" data-id="${id}" style="color:var(--bad)">Delete block</button></div>`;
 });
+A.convBlk = ({ id, t }) => { const { day, b } = findBlock(id); b.t = t; b.dur = Math.max(b.dur, BT[t].dur); b.poi = null; b.pinned = false; autofill(day); refresh(); toast(`Now a ${BT[t].n} block` + (b.poi ? ': ' + P[b.poi].n : '')); };
 A.dur = ({ id, v }) => { const { b } = findBlock(id); b.dur = Math.max(5, b.dur + +v); b.durSet = true; save(); refresh(); };
 A.durSet = ({ id, v }) => { const { b } = findBlock(id); b.dur = +v; b.durSet = true; if (b.t === 'water_s' && +v >= 180) b.t = 'water_l'; else if (b.t === 'water_l' && +v < 180) b.t = 'water_s'; save(); refresh(); };
 A.pickPlace = ({ blk, id }) => { const { b } = findBlock(blk); b.poi = id; b.pinned = true; save(); closeSheet(); toast('Set: ' + P[id].n); };
@@ -500,7 +516,7 @@ function travelPicker(day, b) {
 A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b.durSet = false; autofill(day); refresh(); toast('Later blocks re-picked around ' + Z[z].n); };
 
 // add blocks
-const PALETTE = ['water_s', 'water_l', 'cafe', 'office', 'deep', 'light', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
+const PALETTE = ['water_work', 'water_s', 'water_l', 'cafe', 'panera', 'library', 'carofc', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
 A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
 A.addBlock = ({ t, poi, dur, next }) => {
   const date = sel;
@@ -684,7 +700,7 @@ A.copy = async ({ v }) => { try { await navigator.clipboard.writeText(v); toast(
 
 // ---------- PLACES
 function vPlaces() {
-  const cats = [['', 'Nearby'], ['water_s', 'Water'], ['office', 'Work'], ['cafe', 'Cafés'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['grill', 'Grills'], ['car', 'Car'], ['laundry', 'Laundry'], ['mail', 'Mail'], ['fun', 'Fun'], ['social', 'Bars'], ['fav', '★ Saved']];
+  const cats = [['', 'Nearby'], ['water_work', 'Water'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['grill', 'Grills'], ['car', 'Car'], ['laundry', 'Laundry'], ['mail', 'Mail'], ['fun', 'Fun'], ['social', 'Bars'], ['fav', '★ Saved']];
   return `<div class="top"><h1>Places</h1><button class="btn sm" data-a="zonePick">📍 ${esc(locLabel())}</button></div>
     <div class="search"><input class="field" id="placesQ" type="search" placeholder="Search ${D.pois.length} places, cities, zones" value="${esc(placesQ)}"></div>
     <div class="scroller" style="margin-top:10px">${cats.map(([k, l]) => `<button class="pill ${placesCat === k ? 'on' : ''}" data-a="placesCat" data-k="${k}">${l}</button>`).join('')}</div>
@@ -730,7 +746,7 @@ A.navZone = ({ z }) => navigate([zoneDest(Z[z])]);
 // ---------- MAP (Leaflet, lazy)
 let map, tiles, markers, planLayer;
 const CAT_COLOR = { waterfront: '#2F80ED', work: '#8E6CEF', gym: '#E8475F', food: '#F2994A', overnight_candidate: '#5B5BD6', car_maintenance: '#7D7D7D', camping: '#27AE60', mail: '#B8741A', fun: '#16A085', social: '#D35400', life_support: '#3AB0D8', doordash_cluster: '#E8475F' };
-const MAP_FILTERS = [['all', 'All'], ['water_s', 'Water'], ['grill', 'Grills'], ['office', 'Work'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['car', 'Car'], ['laundry', 'Laundry'], ['fun', 'Fun'], ['fav', '★']];
+const MAP_FILTERS = [['all', 'All'], ['water_s', 'Water'], ['grill', 'Grills'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['car', 'Car'], ['laundry', 'Laundry'], ['fun', 'Fun'], ['fav', '★']];
 function vMap() {
   return `<div class="map-ui"><div class="scroller">${MAP_FILTERS.map(([k, l]) => `<button class="pill ${mapFilter === k ? 'on' : ''}" data-a="mapFilter" data-k="${k}">${l}</button>`).join('')}</div></div>
     <button class="map-fab" data-a="mapLocate">◎</button>`;
