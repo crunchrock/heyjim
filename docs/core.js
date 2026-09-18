@@ -287,7 +287,8 @@ function fit(p, ts, dur) {
 // ---------- labels
 const OBS_TAGS = {
   good: ['👍 Good', 1], nope: ['👎 Skip it', -1], view: ['⭐ Great view', 1], peace: ['😌 Peaceful', 1],
-  signal: ['📶 Good signal', 1], nosignal: ['📵 Bad signal', -1], outlets: ['🔌 Outlets', 1], shade: ['🌳 Shade', 1],
+  cheap: ['💲 Good prices', 1], signal: ['📶 Good signal', 1],
+   nosignal: ['📵 Bad signal', -1], outlets: ['🔌 Outlets', 1], shade: ['🌳 Shade', 1],
   freepark: ['🅿️ Free parking', 1], paidpark: ['💲 Paid parking', -1], crowded: ['👥 Crowded', -1], closed: ['🚫 Closed', -2],
   slept: ['😴 Slept well', 1], knock: ['🚨 Knock / moved on', -2], noisy: ['🔊 Noisy', -1], bright: ['💡 Too bright', -1],
   security: ['👮 Security patrolling', -2], again: ['🔁 Would return', 1],
