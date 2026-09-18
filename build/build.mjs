@@ -86,13 +86,15 @@ const pois = bundle.pois.map(p => {
     wifiOut: p.wifi_outdoors,
     tools: p.loan_a_tool_confirmed || null,
     lotRepair: p.lot_repairs_permitted ?? p.parking_lot_repairs_permitted ?? null,
+    kratom: p.work_details?.sells_kratom ?? null,
+    laptop: p.work_details?.laptop_friendly ?? null,
   });
   const fvS = p.food_value || {};
   const fv = clean({ cu: fvS.cuisine, asian: fvS.asian ? 1 : null, pl: fvS.price_level ?? null, usd: fvS.typical_meal_usd ?? null, r: fvS.rating ?? null, rc: fvS.rating_count ?? null,
     rs: fvS.rating_source, rck: fvS.rating_checked, cheap: fvS.known_for_cheap === true ? 1 : fvS.known_for_cheap === false ? 0 : null, ev: fvS.cheap_evidence });
   const bdS = p.bar_details || {};
   const bd = clean({ k: bdS.kind, vibe: bdS.vibe, games: bdS.games, food: bdS.food, pl: bdS.price_level ?? null, r: bdS.rating ?? null, rc: bdS.rating_count ?? null, rs: bdS.rating_source });
-  const sp = (p.bar_specials || []).map(x => clean({ l: x.label, d: (x.days || []).map(d => DAYS.indexOf(String(d).toLowerCase())).filter(i => i >= 0), s: x.start, e: x.end,
+  const sp = (p.bar_specials || p.specials || []).map(x => clean({ l: x.label, d: (x.days || []).map(d => DAYS.indexOf(String(d).toLowerCase())).filter(i => i >= 0), s: x.start, e: x.end,
     items: x.items, posted: x.posted_date, checked: x.checked_date, conf: x.confidence, src: x.source_id }));
   return clean({
     id: p.id, z: p.zone_id, n: p.name, c: p.category, sc: p.subcategory,

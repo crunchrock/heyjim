@@ -5,7 +5,7 @@ const sheetStack = [];
 const A = {}; // click actions: data-a="name"
 const DUE = { shower: [24, 'Shower'], laundry: [168, 'Laundry'], water_refill: [72, 'Water jug'], groceries: [96, 'Groceries'], mail: [168, 'Mail'] };
 const SUPPLIES = ['Whey', 'Peanut butter', 'Bread / tortillas', 'Jelly', 'Tuna', 'Bananas / fruit', 'Multivitamin', 'Instant coffee', 'Charcoal', 'Tinfoil', 'Lighter', 'Toiletries', 'Paper towels'];
-const CAT_NAMES = { waterfront: 'Waterfront', work: 'Work', gym: 'Gym', food: 'Food', overnight_candidate: 'Overnight', car_maintenance: 'Car', camping: 'Camping', mail: 'Mail', fun: 'Fun', social: 'Social', life_support: 'Laundry / travel center', doordash_cluster: 'DoorDash' };
+const CAT_NAMES = { shop: 'Shop', waterfront: 'Waterfront', work: 'Work', gym: 'Gym', food: 'Food', overnight_candidate: 'Overnight', car_maintenance: 'Car', camping: 'Camping', mail: 'Mail', fun: 'Fun', social: 'Social', life_support: 'Laundry / travel center', doordash_cluster: 'DoorDash' };
 
 // ---------- theme
 function applyTheme() {
@@ -318,7 +318,7 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['meal', 'Food'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars']] : []), ['restroom', 'Restroom'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
+  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['meal', 'Food'], ['meat', 'Meat deals'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars']] : []), ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['restroom', 'Restroom'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
   return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
@@ -703,7 +703,7 @@ function travelPicker(day, b) {
 A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b.durSet = false; autofill(day); refresh(); toast('Later blocks re-picked around ' + Z[z].n); };
 
 // add blocks
-const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'panera', 'library', 'carofc', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
+const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'kava', 'panera', 'library', 'carofc', 'meat', 'books', 'vape', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
 A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
 A.addBlock = ({ t, poi, dur, next, auto }) => {
   if (t === 'sleep' && poi) return A.reconQuick({ id: poi });
@@ -832,6 +832,7 @@ function placeSheet(id, type, blk) {
   if (p.fv && (p.fv.r || p.fv.pl)) h += `<h2>Value</h2><div class="card"><div class="chips">${p.fv.cu ? chip(p.fv.cu) : ''} ${p.fv.pl ? chip('$'.repeat(p.fv.pl)) : ''} ${p.fv.usd ? chip('~$' + p.fv.usd + ' a meal', 'ok') : ''} ${p.fv.r ? chip(`★${p.fv.r} · ${p.fv.rc || '?'} reviews`, 'ok') : ''}</div>
     ${p.fv.ev ? `<p class="note">${esc(p.fv.ev)}</p>` : ''}<p class="tiny faint">${esc(p.fv.rs || 'Rating')} checked ${esc(p.fv.rck || '?')}</p></div>`;
   if (p.bd || p.sp?.length) h += barHtml(p);
+  if (isKava(p)) h += `<div class="chips" style="margin-top:10px">${p.x.kratom === false ? chip('Kava, no kratom', 'ok') : chip('Kratom: unknown')} ${p.x.laptop ? chip('Laptop-friendly', 'ok') : ''}</div>`;
   if (p._rec) h += recHtml(p._rec);
   if (p.tn) h += `<h2>Notes</h2><p class="note">${esc(p.tn)}</p>`;
   if (p.capn?.length) h += `<h2>What it's good for</h2>${p.capn.map(([c, n, cond]) => {
@@ -869,9 +870,9 @@ function mailHtml(p) {
 function barHtml(p) {
   const b = p.bd || {}, fmtD = d => (d ? new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null);
   const t = x => (x ? fmtClock(+x.split(':')[0] * 60 + +x.split(':')[1]) : '');
-  return `<h2>Bar</h2><div class="card"><div class="chips">${b.k ? chip(b.k.replace(/_/g, ' ')) : ''} ${b.pl ? chip('$'.repeat(b.pl)) : ''} ${b.r ? chip(`★${b.r}${b.rc ? ' · ' + b.rc : ''}`, 'ok') : ''}</div>
-    ${b.vibe ? `<p class="note">${esc(b.vibe)}</p>` : ''}${b.games ? `<p class="note">Games: ${esc(b.games)}</p>` : ''}${b.food ? `<p class="note">Food: ${esc(b.food)}</p>` : ''}</div>
-    <h2>Specials</h2>${p.sp?.length ? p.sp.map(x => `<div class="card"><b>${esc(x.l || 'Special')}</b> <span class="muted small">· ${dayNames(x.d)}${x.s ? ' ' + t(x.s) + (x.e ? '–' + t(x.e) : '') : ''}</span>
+  return (p.bd ? `<h2>Bar</h2><div class="card"><div class="chips">${b.k ? chip(b.k.replace(/_/g, ' ')) : ''} ${b.pl ? chip('$'.repeat(b.pl)) : ''} ${b.r ? chip(`★${b.r}${b.rc ? ' · ' + b.rc : ''}`, 'ok') : ''}</div>
+    ${b.vibe ? `<p class="note">${esc(b.vibe)}</p>` : ''}${b.games ? `<p class="note">Games: ${esc(b.games)}</p>` : ''}${b.food ? `<p class="note">Food: ${esc(b.food)}</p>` : ''}</div>` : '') + `
+    <h2>${p.c === 'social' ? 'Specials' : 'Deals'}</h2>${p.sp?.length ? p.sp.map(x => `<div class="card"><b>${esc(x.l || 'Special')}</b> <span class="muted small">· ${dayNames(x.d)}${x.s ? ' ' + t(x.s) + (x.e ? '–' + t(x.e) : '') : ''}</span>
       ${x.items?.length ? `<div class="note">${x.items.map(esc).join(' · ')}</div>` : ''}
       <div class="tiny faint" style="margin-top:4px">${x.posted ? 'Posted ' + fmtD(x.posted) + ' · ' : 'Post date unknown · '}checked ${fmtD(x.checked) || '?'}${x.conf ? ' · ' + x.conf.replace(/_/g, ' ') : ''}${x.src && D.sources[x.src] ? ` · <a href="${esc(D.sources[x.src][1])}" target="_blank" rel="noopener">source</a>` : ''}</div></div>`).join('') : '<p class="note">No current specials found. Worth asking the bartender.</p>'}`;
 }
@@ -901,7 +902,7 @@ A.copy = async ({ v }) => { try { await navigator.clipboard.writeText(v); toast(
 
 // ---------- PLACES
 function vPlaces() {
-  const cats = [['', 'Nearby'], ['water_work', 'Water'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['grill', 'Grills'], ['car', 'Car'], ['laundry', 'Laundry'], ['mail', 'Mail'], ['fun', 'Fun'], ['social', 'Bars'], ['fav', '★ Saved']];
+  const cats = [['', 'Nearby'], ['water_work', 'Water'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['grill', 'Grills'], ['car', 'Car'], ['laundry', 'Laundry'], ['mail', 'Mail'], ['fun', 'Fun'], ['social', 'Bars'], ['meat', 'Meat deals'], ['kava', 'Kava / tea'], ['books', 'Bookstores'], ['groc', 'Groceries'], ['vape', 'Vape'], ['fav', '★ Saved']];
   return `<div class="top"><h1>Places</h1><button class="btn sm" data-a="zonePick">📍 ${esc(locLabel())}</button></div>
     <div class="search"><input class="field" id="placesQ" type="search" placeholder="Search ${D.pois.length} places, cities, zones" value="${esc(placesQ)}"></div>
     <div class="scroller" style="margin-top:10px">${cats.map(([k, l]) => `<button class="pill ${placesCat === k ? 'on' : ''}" data-a="placesCat" data-k="${k}">${l}</button>`).join('')}</div>
@@ -946,7 +947,7 @@ A.navZone = ({ z }) => navigate([zoneDest(Z[z])]);
 
 // ---------- MAP (Leaflet, lazy)
 let map, tiles, markers, planLayer;
-const CAT_COLOR = { waterfront: '#2F80ED', work: '#8E6CEF', gym: '#E8475F', food: '#F2994A', overnight_candidate: '#5B5BD6', car_maintenance: '#7D7D7D', camping: '#27AE60', mail: '#B8741A', fun: '#16A085', social: '#D35400', life_support: '#3AB0D8', doordash_cluster: '#E8475F' };
+const CAT_COLOR = { shop: '#9B51E0', waterfront: '#2F80ED', work: '#8E6CEF', gym: '#E8475F', food: '#F2994A', overnight_candidate: '#5B5BD6', car_maintenance: '#7D7D7D', camping: '#27AE60', mail: '#B8741A', fun: '#16A085', social: '#D35400', life_support: '#3AB0D8', doordash_cluster: '#E8475F' };
 const MAP_FILTERS = [['all', 'All'], ['water_s', 'Water'], ['grill', 'Grills'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['car', 'Car'], ['laundry', 'Laundry'], ['fun', 'Fun'], ['fav', '★']];
 function vMap() {
   return `<div class="map-ui"><div class="scroller">${MAP_FILTERS.map(([k, l]) => `<button class="pill ${mapFilter === k ? 'on' : ''}" data-a="mapFilter" data-k="${k}">${l}</button>`).join('')}</div></div>
