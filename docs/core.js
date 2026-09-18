@@ -389,7 +389,13 @@ const BT = {
   vape: { n: 'Vape / smoke shop', ic: '💨', dur: 20, m: p => !!p.caps.vape || /vape|smoke/.test(p.sc || ''), b: p => valueScore(p), caps: ['vape'], hint: 'Ranked by reviews that mention good prices.' },
   gas: { n: 'Gas', ic: '⛽', dur: 10, m: isGas, b: p => GAS_PREF[p.sc] || 0, caps: ['fuel'], hint: 'Murphy USA is usually cheapest. Check live prices before a long drive.' },
   mall: { n: 'Mall / food court', ic: '🛍️', dur: 120, m: isMall, b: p => valueScore(p), caps: [], hint: 'Food court, restrooms, a walk, laptop time. Decent DoorDash start point too.' },
-  carofc: { n: 'Car office', ic: '🚙', dur: 120, log: 'dev', hint: 'Work from the car wherever you\'re parked (usually tonight\'s spot): inverter + hotspot, windows cracked.' },
+  carofc: { n: 'Car office', ic: '🚙', dur: 120, log: 'dev', night: 1, hint: 'Work from the car wherever you\'re parked (usually tonight\'s spot): inverter + hotspot, windows cracked.' },
+  gaming: { n: 'Gaming / chill', ic: '🕹️', dur: 90, night: 1, hint: 'Off the clock at your spot: games, shows, whatever recharges you.' },
+  agentic: { n: 'Agentic chill session', ic: '🤖', dur: 120, log: 'dev', night: 1, hint: 'Send a prompt, play a little, check in on the agents when they finish. Counts as dev time.' },
+  bedtime: { n: 'Bedtime dev', ic: '🌒', dur: 60, log: 'dev', night: 1, hint: 'Light design / code / notes winding down before sleep.' },
+  nap: { n: 'Nap', ic: '😴', dur: 40, hint: 'Wherever you\'re parked. Shade + windows cracked.' },
+  carmeal: { n: 'Car meal', ic: '🥫', dur: 30, hint: 'Car staples: tuna, PB&J, whey, fruit. Cheap and fast.' },
+  storage: { n: 'Storage unit run', ic: '📦', dur: 45, m: p => !!p.caps.storage, b: () => 0, caps: ['storage'], hint: 'Your Public Storage unit in Sanford. Later blocks re-plan around Sanford.' },
   free: { n: 'Free time', ic: '✨', dur: 60, hint: 'Unplanned. Wander, rest, whatever.' },
 };
 function sleepBonus(p) {
@@ -406,7 +412,7 @@ function sleepBonus(p) {
 // rank candidate places for a block type near `from` at time `at`.
 // Distance dominates; closed places sink but stay visible (labeled with when they open); nothing past maxMi.
 // `anchor` keeps a day's blocks in its zone so plans don't drift town to town without a Travel block.
-const MAX_MI = { fun: 70, social: 60, sleep: 40 };
+const MAX_MI = { fun: 70, social: 60, sleep: 40, storage: 700 };
 function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi, adj } = {}) {
   const def = BT[type];
   if (!def?.m) return [];
@@ -501,7 +507,7 @@ function mkBlock(spec) {
 const LOCAL_T = new Set(['gas', 'kava', 'cafe', 'panera', 'library', 'office', 'deep', 'light', 'water_s', 'water_work', 'water_l', 'meal', 'restroom', 'water', 'groc']);
 const WORK_T = new Set(['kava', 'cafe', 'panera', 'library', 'office', 'deep', 'light']);
 // work sessions are 2–4h; their duration stepper moves in 30m steps
-const WORK_BLOCKS = new Set(['kava', 'water_work', 'water_l', 'cafe', 'panera', 'library', 'office', 'deep', 'carofc', 'dash', 'car']);
+const WORK_BLOCKS = new Set(['agentic', 'kava', 'water_work', 'water_l', 'cafe', 'panera', 'library', 'office', 'deep', 'carofc', 'dash', 'car']);
 // ---- multi-day: S.days[date] = { date, startMin, tpl, blocks }
 const dateTs = (date, min = 0) => { const [y, m, d] = date.split('-').map(Number); return new Date(y, m - 1, d, 0, min).getTime(); };
 const addDays = (date, n) => dayKey(dateTs(date, 12 * 60) + n * DAY + 4 * HOUR);
@@ -599,7 +605,7 @@ function flow(day, assign) {
       b.poi = best && !tooFar ? best.p.id : null;
       b.far = tooFar ? best.p.id : null;
     }
-    const dest = b.t === 'carofc' ? (nextSleep(day, b) ? blockPoint(nextSleep(day, b)) : null) : blockPoint(b);
+    const dest = BT[b.t].night ? (nextSleep(day, b) ? blockPoint(nextSleep(day, b)) : null) : blockPoint(b);
     if (b.t !== 'travel') { r.miles = dest ? hav(from, dest) : 0; r.travel = driveMin(r.miles); } else r.travel = 0;
     if (b.st === 'done') { r.s = b.s0; r.e = b.s1; }
     else if (b.st === 'active') { r.s = b.s0; r.e = Math.max(b.s0 + b.dur * MIN, now); r.over = now > b.s0 + b.dur * MIN; }
@@ -610,10 +616,10 @@ function flow(day, assign) {
       r.e = r.s + b.dur * MIN;
     }
     if (b.st !== 'done') blockWarnings(b, r);
-    if (b.st === 'plan' && dest && b.t !== 'travel' && hav(anchor, dest) > 15) r.warn.push(`Nearest ${lc(BT[b.t].n)} in the data is ${Math.round(hav(anchor, dest))} mi out`);
+    if (b.st === 'plan' && dest && b.t !== 'travel' && b.t !== 'storage' && hav(anchor, dest) > 15) r.warn.push(`Nearest ${lc(BT[b.t].n)} in the data is ${Math.round(hav(anchor, dest))} mi out`);
     t = r.e;
     if (dest) from = dest;
-    if (b.t === 'travel' && dest) anchor = dest;
+    if ((b.t === 'travel' || b.t === 'storage') && dest) anchor = dest;
     if (b.poi) prevPoi = b.poi;
     if (b.poi && WORK_T.has(b.t)) usedIndoor.add(b.poi);
     const k = blockKind(b); if (k) usedKinds.add(k);

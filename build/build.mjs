@@ -177,6 +177,12 @@ const zones = bundle.zones.map(z => {
   });
 });
 
+// private places from packs/_profile.json (e.g. his storage unit): encrypted like everything else
+for (const pl of bundle.profile.places || []) {
+  const z = zones.reduce((a, b) => (Math.hypot(b.lat - pl.lat, b.lng - pl.lng) < Math.hypot(a.lat - pl.lat, a.lng - pl.lng) ? b : a));
+  pois.push(clean({ id: 'me_' + pl.id, z: z.id, n: pl.name, c: 'mine', sc: pl.kind, a: pl.address, city: pl.city, lat: pl.lat, lng: pl.lng, gq: 'exact',
+    web: pl.website, caps: { [pl.kind]: 'd' }, am: [], tags: [], tn: pl.notes, q: pl.search_query, x: {} }));
+}
 const usedSrc = new Set(pois.flatMap(p => p.src || []));
 const sources = {};
 for (const s of bundle.sources) if (usedSrc.has(s.id)) sources[s.id] = [s.title || s.publisher || s.url, s.url];

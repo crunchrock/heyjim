@@ -5,7 +5,7 @@ const sheetStack = [];
 const A = {}; // click actions: data-a="name"
 const DUE = { shower: [24, 'Shower'], laundry: [168, 'Laundry'], water_refill: [72, 'Water jug'], groceries: [96, 'Groceries'], mail: [168, 'Mail'] };
 const SUPPLIES = ['Whey', 'Peanut butter', 'Bread / tortillas', 'Jelly', 'Tuna', 'Bananas / fruit', 'Multivitamin', 'Instant coffee', 'Charcoal', 'Tinfoil', 'Lighter', 'Toiletries', 'Paper towels'];
-const CAT_NAMES = { shop: 'Shop', waterfront: 'Waterfront', work: 'Work', gym: 'Gym', food: 'Food', overnight_candidate: 'Overnight', car_maintenance: 'Car', camping: 'Camping', mail: 'Mail', fun: 'Fun', social: 'Social', life_support: 'Laundry / travel center', doordash_cluster: 'DoorDash' };
+const CAT_NAMES = { mine: 'Your places', shop: 'Shop', waterfront: 'Waterfront', work: 'Work', gym: 'Gym', food: 'Food', overnight_candidate: 'Overnight', car_maintenance: 'Car', camping: 'Camping', mail: 'Mail', fun: 'Fun', social: 'Social', life_support: 'Laundry / travel center', doordash_cluster: 'DoorDash' };
 
 // ---------- theme
 function applyTheme() {
@@ -418,6 +418,7 @@ A.moreTpl = () => { showAllTpl = !showAllTpl; render(); };
 function blockTitle(b) {
   if (b.t === 'travel') return 'Travel → ' + (Z[b.toZone]?.n || 'pick a zone');
   if (b.t === 'gym') return 'Gym + shower · ' + WORKOUTS[S.workout % 5].n;
+  if (!BT[b.t].m && !BT[b.t].night && b.t !== 'travel' && b.t !== 'free') return BT[b.t].n + ' · wherever you\'re parked';
   return b.label || BT[b.t].n;
 }
 function blockHtml(r, day, isNext, isToday, prevPoi) {
@@ -458,7 +459,7 @@ function blockHtml(r, day, isNext, isToday, prevPoi) {
   return leg + `<div class="blk ${cls}" data-bid="${b.id}"><div class="blk-time">${time}</div>
     <div class="blk-body" data-a="openBlock" data-id="${b.id}">
       <div class="blk-title"><span class="ic">${def.ic}</span><span class="grow ell">${esc(blockTitle(b))}</span>${b.st === 'active' ? chip(r.over ? 'Over' : 'Now', 'acc') : ''}${b.st === 'done' ? chip('Done', 'ok') : ''}${r.skip ? chip('Skipped') : ''}<span class="drag" data-drag="${b.id}" aria-label="Drag to reorder">⋮⋮</span><button class="bx" data-a="delBlk" data-id="${b.id}" aria-label="Remove">×</button></div>
-      ${b.t === 'carofc' ? `<div class="blk-place muted">${nextSleep(day, b)?.confirmed ? 'At tonight\'s spot · ' + esc(P[nextSleep(day, b).poi].n) : nextSleep(day, b) ? 'At or near tonight\'s spot' : 'Wherever you\'re parked'}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
+      ${BT[b.t].night ? `<div class="blk-place muted">${nextSleep(day, b)?.confirmed ? 'At tonight\'s spot · ' + esc(P[nextSleep(day, b).poi].n) : nextSleep(day, b) ? 'At or near tonight\'s spot' : 'Wherever you\'re parked'}</div>` : ''}${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
       ${b.t === 'sleep' && b.confirmed ? chip('✓ Confirmed', 'ok') + ' ' : ''}${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${recon}${warns}${conv}${acts}</div></div>`;
 }
 function findBlock(id) {
@@ -711,8 +712,17 @@ function travelPicker(day, b) {
 A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b.durSet = false; autofill(day); refresh(); toast('Later blocks re-picked around ' + Z[z].n); };
 
 // add blocks
-const PALETTE = ['deep', 'water_work', 'water_s', 'water_l', 'cafe', 'kava', 'panera', 'library', 'carofc', 'mall', 'meat', 'gas', 'books', 'vape', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'light', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
-A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
+const PALETTE = [
+  ['Work', ['deep', 'water_work', 'cafe', 'kava', 'panera', 'library', 'carofc', 'light', 'dash']],
+  ['Water & outdoors', ['water_s', 'water_l', 'grill', 'fun', 'books']],
+  ['Food & drink', ['meal', 'meat', 'mall', 'carmeal', 'social']],
+  ['Body & car', ['gym', 'shower', 'restroom', 'car', 'gas']],
+  ['Errands', ['groc', 'water', 'laundry', 'mail', 'vape']],
+  ['Evening at your spot', ['gaming', 'agentic', 'bedtime', 'nap']],
+  ['Moving & night', ['travel', 'sleep', 'free']],
+  ['Rare', ['storage']],
+];
+A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + PALETTE.map(([g, ts]) => `<div class="lbl" style="margin-top:14px">${g}</div><div class="palette">${ts.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`).join(''));
 A.addBlock = ({ t, poi, dur, next, auto }) => {
   if (t === 'sleep' && poi) return A.reconQuick({ id: poi });
   if (t === 'deep' && !poi && !auto) return A.devPick();
@@ -958,7 +968,7 @@ A.navZone = ({ z }) => navigate([zoneDest(Z[z])]);
 
 // ---------- MAP (Leaflet, lazy)
 let map, tiles, markers, planLayer;
-const CAT_COLOR = { shop: '#9B51E0', waterfront: '#2F80ED', work: '#8E6CEF', gym: '#E8475F', food: '#F2994A', overnight_candidate: '#5B5BD6', car_maintenance: '#7D7D7D', camping: '#27AE60', mail: '#B8741A', fun: '#16A085', social: '#D35400', life_support: '#3AB0D8', doordash_cluster: '#E8475F' };
+const CAT_COLOR = { mine: '#E8475F', shop: '#9B51E0', waterfront: '#2F80ED', work: '#8E6CEF', gym: '#E8475F', food: '#F2994A', overnight_candidate: '#5B5BD6', car_maintenance: '#7D7D7D', camping: '#27AE60', mail: '#B8741A', fun: '#16A085', social: '#D35400', life_support: '#3AB0D8', doordash_cluster: '#E8475F' };
 const MAP_FILTERS = [['all', 'All'], ['water_s', 'Water'], ['grill', 'Grills'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['sleep', 'Sleep'], ['car', 'Car'], ['laundry', 'Laundry'], ['fun', 'Fun'], ['fav', '★']];
 function vMap() {
   return `<div class="map-ui"><div class="scroller">${MAP_FILTERS.map(([k, l]) => `<button class="pill ${mapFilter === k ? 'on' : ''}" data-a="mapFilter" data-k="${k}">${l}</button>`).join('')}</div></div>
