@@ -261,7 +261,7 @@ function sketchChip(p) {
   if (o.pr === 'extra_friction') return ['Extra friction', 'warn'];
   return null;
 }
-const LOT_TYPE = { walmart: 'Walmart lot', planet_fitness: 'PF lot', hotel_cluster: 'Hotel lot', cracker_barrel: 'Cracker Barrel', truck_stop: 'Truck stop', public_lot: 'Public lot' };
+const LOT_TYPE = { walmart: 'Walmart lot', planet_fitness: 'PF lot', hotel_cluster: 'Hotel lot', cracker_barrel: 'Cracker Barrel', truck_stop: 'Truck stop', public_lot: 'Public lot', rest_area: 'Rest area (3h limit)', outdoor_retailer: 'Bass Pro / Cabela’s', casino: 'Casino' };
 const lotChip = p => (p._ov ? [LOT_TYPE[p._ov.ty] || 'Lot', ''] : p.caps.tent_camp ? ['Camping', 'ok'] : p.caps.paid_lodging ? ['Paid room', ''] : null);
 function lastNight(id) { let t = 0; for (const n of S.nights) if (n.poi === id && n.t > t) t = n.t; return t; }
 function wfChips(p) {
