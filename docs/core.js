@@ -483,7 +483,7 @@ function blockWarnings(b, r) {
     if (b.t === 'sleep') { const ln = lastNight(p.id); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + fmtAgo(ln) + '. Rotate?'); }
   } else if (BT[b.t].m && b.t !== 'travel') r.warn.push('No place picked yet');
   if (b.t === 'dash') {
-    const z = zoneOfPoint(p ? ptOf(p) : here()), wins = (D.dd[z?.id] || []).flatMap(m => m.win || []);
+    const z = zoneOfPoint((p && ptOf(p)) || here()), wins = (D.dd[z?.id] || []).flatMap(m => m.win || []);
     const s = new Date(r.s), sm = s.getHours() * 60 + s.getMinutes(), em = sm + b.dur;
     const inWin = wins.some(w => { const [a, c] = w.split('-').map(x => { const [h, m] = x.split(':'); return +h * 60 + +m; }); return sm < c && em > a; });
     if (wins.length && !inWin) r.warn.push('Outside the peak windows (' + wins.join(', ') + ')');
@@ -516,7 +516,8 @@ Produce ONE JSON data pack for this area in the SAME schema as the existing flor
 
 Existing zones (don't duplicate): ${zones}
 
-The user lives out of an Acura MDX as a game developer (Bad Shrooms) and DoorDash driver. For each new zone (a planning region ~15–30 mi across) research:
+${D.profile?.context || 'The user lives on the road in Florida as a game developer and delivery driver.'}
+For each new zone (a planning region ~15–30 mi across) research:
 - Waterfront car-office spots: causeways, boat ramps, bridges, piers, Intracoastal parks, beach lots. Priority: car parked close to the water, FREE parking, peaceful, views, restrooms, shade, public grills. Give hours (gates often close at sunset).
 - Work: independent cafés, Panera, libraries (hours, Wi-Fi, outlets).
 - Planet Fitness clubs (exact hours per day, 24/7 or not) for gym + shower.

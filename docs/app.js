@@ -89,6 +89,7 @@ const VIEWS = { today: vToday, map: vMap, places: vPlaces, me: vWeek };
 function render() {
   const y = window.scrollY, same = render.last === tab;
   for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.tab === tab);
+  document.body.classList.toggle('map-on', tab === 'map');
   if (tab !== 'map' && $('#mapBox')) $('#mapBox').hidden = true;
   $('#view').innerHTML = VIEWS[tab]();
   if (tab === 'map') initMap();
@@ -150,10 +151,10 @@ function hoursChip(p, ts = Date.now(), dur = 0) {
   return chip(f.txt, f.k === 'ok' ? 'ok' : f.k === 'short' ? 'warn' : f.k === 'closed' ? 'bad' : '');
 }
 function placeChips(p, type, ts, dur) {
-  const out = [hoursChip(p, ts, dur)];
+  const out = type === 'sleep' && !p.h ? [] : [hoursChip(p, ts, dur)];
   const tc = trustChip(p, type && BT[type]?.caps?.length ? BT[type].caps : null);
   out.push(chip(tc[0], tc[1]));
-  const sk = sketchChip(p); if (sk) out.push(chip(sk[0], sk[1]));
+  const sk = (!type || type === 'sleep') && sketchChip(p); if (sk) out.push(chip(sk[0], sk[1]));
   for (const [t, c] of wfChips(p).slice(0, type && /water|grill/.test(type) ? 4 : 2)) out.push(chip(t, c));
   const ln = lastNight(p.id); if (ln && Date.now() - ln < 10 * DAY) out.push(chip('Slept here ' + fmtAgo(ln), 'warn'));
   if (S.fav[p.id]) out.push(chip('★ Saved', 'acc'));
@@ -613,7 +614,7 @@ function campHtml(c) {
 function mailHtml(p) {
   const m = p._mail, name = S.settings.name || 'YOUR NAME';
   const city = (p.city || '').toUpperCase(), zip = m.zip || '';
-  const addr = m.tpl ? m.tpl.replace(/\{?\{?\s*(full_?name|name|recipient)[^}\]]*\}?\}?|\[[^\]]*name[^\]]*\]/gi, name) : m.gd ? `${name}\nGENERAL DELIVERY\n${city} FL ${zip}-9999` : null;
+  const addr = m.tpl ? m.tpl.replace(/\{?\{?\s*(full[ _]?name|name|recipient)[^}\]\n]*\}?\}?|\[[^\]\n]*name[^\]\n]*\]/gi, name).replace(/\[[^\]\n]*\]/g, zip ? zip + '-9999' : '') : m.gd ? `${name}\nGENERAL DELIVERY\n${city} FL ${zip}-9999` : null;
   return `<h2>Mail</h2><div class="card"><div class="chips">${chip((m.ty || '').replace(/_/g, ' '))} ${m.gd ? chip('General Delivery listed', 'ok') : ''} ${m.gdc ? chip('GD confirmed', 'ok') : ''} ${m.hold ? chip('Hold at location', 'ok') : ''}</div>
     ${addr ? `<pre class="note" style="font:600 14px/1.5 ui-monospace,monospace;margin:10px 0">${esc(addr)}</pre><button class="btn sm" data-a="copy" data-v="${esc(addr)}">Copy address</button>` : ''}
     ${m.ask ? `<p class="note">${esc(m.ask)}</p>` : ''}${m.pick ? `<p class="note">Pickup: ${esc(typeof m.pick === 'string' ? m.pick : JSON.stringify(m.pick))}</p>` : ''}${m.ph ? `<a class="btn sm" href="tel:${esc(m.ph.replace(/[^\d+]/g, ''))}">Call ${esc(m.ph)}</a>` : ''}</div>`;
@@ -703,9 +704,9 @@ function loadLeaflet() {
   });
 }
 function setTiles() {
-  const dark = document.documentElement.dataset.theme === 'dark';
-  if (tiles) map.removeLayer(tiles);
-  tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? 'dark_all' : 'rastertiles/voyager'}/{z}/{x}/{y}{r}.png`, { maxZoom: 19, subdomains: 'abcd', attribution: '© OpenStreetMap © CARTO' }).addTo(map);
+  // OSM tiles; night mode darkens them with a CSS filter (see .map-dark in styles.css)
+  if (!tiles) tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  $('#mapBox').classList.toggle('map-dark', document.documentElement.dataset.theme === 'dark');
 }
 async function initMap() {
   let box = $('#mapBox');
@@ -732,7 +733,7 @@ function drawMarkers() {
   const pts = [];
   flow(getDay(sel)).forEach(r => { if (r.skip || r.b.st === 'done') return; const pt = blockPoint(r.b); if (pt) pts.push([pt.lat, pt.lng, BT[r.b.t].ic]); });
   if (pts.length > 1) L.polyline(pts.map(x => [x[0], x[1]]), { color: '#E8475F', weight: 3, dashArray: '6 8', opacity: 0.8 }).addTo(planLayer);
-  pts.forEach(([a, b, ic], i) => L.marker([a, b], { icon: L.divIcon({ className: '', html: `<div style="background:#fff;border-radius:12px;padding:1px 5px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3);white-space:nowrap">${i + 1} ${ic}</div>` }) }).addTo(planLayer));
+  pts.forEach(([a, b, ic], i) => L.marker([a, b], { icon: L.divIcon({ className: '', html: `<div style="background:#fff;color:#222;border-radius:12px;padding:1px 5px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3);white-space:nowrap">${i + 1} ${ic}</div>` }) }).addTo(planLayer));
   if (S.loc) L.marker([S.loc.lat, S.loc.lng], { icon: L.divIcon({ className: '', html: '<div class="me-dot"></div>', iconSize: [16, 16] }) }).addTo(planLayer);
 }
 A.mapFilter = ({ k }) => { mapFilter = k; render(); };
@@ -741,7 +742,7 @@ A.mapLocate = async () => { const l = await locate(true); if (l && map) map.setV
 // ---------- WEEK / settings
 function bar(v, lo, hi, label, unit = '') {
   const pct = Math.min(100, (v / hi) * 100);
-  return `<div class="card"><div class="stat"><span>${label}</span><b>${unit === 'h' ? (v / 60).toFixed(1) + 'h' : v}<span class="muted small"> / ${lo === hi ? hi : lo + '–' + hi}${unit === 'h' ? 'h' : ''}</span></b></div><div class="bar"><i class="${v >= lo * (unit === 'h' ? 1 : 1) ? 'ok' : ''}" style="width:${pct}%"></i></div></div>`;
+  return `<div class="card"><div class="stat"><span>${label}</span><b>${unit === 'h' ? (v / 60).toFixed(1) + 'h' : v}<span class="muted small"> / ${unit === 'h' ? `${lo / 60}–${hi / 60}h` : lo === hi ? hi : lo + '–' + hi}</span></b></div><div class="bar"><i class="${v >= lo ? 'ok' : ''}" style="width:${pct}%"></i></div></div>`;
 }
 function vWeek() {
   const w = weekStats(), ws = weekStart();
@@ -749,7 +750,7 @@ function vWeek() {
   const seg = (k, opts) => `<div class="seg">${opts.map(([v, l]) => `<button class="${set[k] === v ? 'on' : ''}" data-a="setOpt" data-k="${k}" data-v="${v}">${l}</button>`).join('')}</div>`;
   const tog = (k, l) => `<label class="check"><input type="checkbox" data-c="tog" data-k="${k}" ${set[k] ? 'checked' : ''}>${l}</label>`;
   return `<div class="top"><div><div class="sub">Week of ${new Date(ws).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div><h1>Week</h1></div><button class="btn sm" data-a="logTime">+ Log time</button></div>
-    <div class="stack">${bar(w.dev, 45 * 60, 55 * 60, '🎮 Bad Shrooms', 'h')}${bar(w.dash, 8 * 60, 12 * 60, '🚗 DoorDash', 'h')}
+    <div class="stack">${bar(w.dev, 45 * 60, 55 * 60, '🎮 ' + esc(D.profile?.project || 'Game dev'), 'h')}${bar(w.dash, 8 * 60, 12 * 60, '🚗 DoorDash', 'h')}
     ${w.dash ? `<div class="card"><div class="stat"><span>Dash earnings</span><b>$${w.gross.toFixed(0)}</b></div><div class="sub">$${(w.gross / Math.max(0.1, w.dash / 60)).toFixed(2)}/h${w.miles ? ' · $' + (w.gross / w.miles).toFixed(2) + '/mi · ' + w.miles.toFixed(0) + ' mi' : ''}${w.gas ? ' · net $' + (w.gross - w.gas).toFixed(0) : ''}</div></div>` : ''}
     <div class="grid2">${bar(w.gym, 5, 5, '🏋️ Gym')}${bar(w.car, 1, 1, '🔧 Car')}</div>${bar(w.waterDays.size, 5, 7, '🌊 Water days')}</div>
     <div class="row" style="margin-top:10px"><button class="btn" data-a="dashLog">+ Dash shift</button></div>

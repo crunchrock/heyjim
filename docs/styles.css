@@ -178,3 +178,7 @@ input.field, select.field, textarea.field { width: 100%; padding: 11px 13px; bor
 .warnline { color: var(--warn); font-size: 13px; font-weight: 600; margin-top: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .warnline .btn { color: var(--text); }
 .btn[disabled] { opacity: .35; }
+body.map-on .toast { bottom: calc(var(--safe-b) + 142px); }
+a.btn { text-decoration: none; }
+.grid2 > .card { margin-top: 0; }
+.map-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7); }

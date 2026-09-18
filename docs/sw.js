@@ -1,5 +1,5 @@
 // Offline support. VERSION is rewritten by build/build.mjs on every build.
-const VERSION = '050a6a166e';
+const VERSION = 'b6028a9d68';
 const SHELL = ['./', 'index.html', 'styles.css', 'core.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open('shell-' + VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -35,5 +35,5 @@ self.addEventListener('fetch', e => {
     return e.respondWith(cacheFirst(req, 'shell-' + VERSION));
   }
   if (u.hostname === 'cdnjs.cloudflare.com') return e.respondWith(cacheFirst(req, 'lib'));
-  if (u.hostname.endsWith('basemaps.cartocdn.com')) return e.respondWith(cacheFirst(req, 'tiles'));
+  if (u.hostname === 'tile.openstreetmap.org') return e.respondWith(cacheFirst(req, 'tiles'));
 });
