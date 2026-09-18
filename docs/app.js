@@ -3,7 +3,6 @@
 let tab = 'today', sel = null, wx = null, alerts = [], placesQ = '', placesCat = '', mapFilter = 'all', toastT;
 const sheetStack = [];
 const A = {}; // click actions: data-a="name"
-const NEED_TILES = [['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['office', 'Wi-Fi'], ['sleep', 'Sleep'], ['groc', 'Groceries'], ['laundry', 'Laundry']];
 const DUE = { shower: [24, 'Shower'], laundry: [168, 'Laundry'], water_refill: [72, 'Water jug'], groceries: [96, 'Groceries'], mail: [168, 'Mail'] };
 const SUPPLIES = ['Whey', 'Peanut butter', 'Bread / tortillas', 'Jelly', 'Tuna', 'Bananas / fruit', 'Multivitamin', 'Instant coffee', 'Charcoal', 'Tinfoil', 'Lighter', 'Toiletries', 'Paper towels'];
 const CAT_NAMES = { waterfront: 'Waterfront', work: 'Work', gym: 'Gym', food: 'Food', overnight_candidate: 'Overnight', car_maintenance: 'Car', camping: 'Camping', mail: 'Mail', fun: 'Fun', social: 'Social', life_support: 'Laundry / travel center', doordash_cluster: 'DoorDash' };
@@ -146,19 +145,23 @@ document.addEventListener('input', e => { if (e.target.id === 'placesQ') { place
 
 // ---------- shared bits
 const chip = (t, c = '') => `<span class="chip ${c}">${esc(t)}</span>`;
-function hoursChip(p, ts = Date.now(), dur = 0) {
+function hoursChip(p, ts = Date.now(), dur = 0, quiet) {
   const f = fit(p, ts, dur);
-  return chip(f.txt, f.k === 'ok' ? 'ok' : f.k === 'short' ? 'warn' : f.k === 'closed' ? 'bad' : '');
+  if (f.k === 'unk') return quiet ? '' : chip('Hours not listed');
+  return chip(f.txt, f.k === 'ok' ? 'ok' : f.k === 'short' ? 'warn' : 'bad');
 }
+// Rows only show chips that change a decision: real hours, confirmed/reported evidence, overnight risk, waterfront perks.
 function placeChips(p, type, ts, dur) {
-  const out = type === 'sleep' && !p.h ? [] : [hoursChip(p, ts, dur)];
+  const out = [];
+  if (type === 'sleep') { if (is247(p)) out.push(chip('24h restroom access', 'ok')); }
+  else { const hc = hoursChip(p, ts, dur, true); if (hc) out.push(hc); }
   const tc = trustChip(p, type && BT[type]?.caps?.length ? BT[type].caps : null);
-  out.push(chip(tc[0], tc[1]));
+  if (type !== 'sleep' && tc[1]) out.push(chip(tc[0], tc[1]));
   const sk = (!type || type === 'sleep') && sketchChip(p); if (sk) out.push(chip(sk[0], sk[1]));
   for (const [t, c] of wfChips(p).slice(0, type && /water|grill/.test(type) ? 4 : 2)) out.push(chip(t, c));
   const ln = lastNight(p.id); if (ln && Date.now() - ln < 10 * DAY) out.push(chip('Slept here ' + fmtAgo(ln), 'warn'));
   if (S.fav[p.id]) out.push(chip('★ Saved', 'acc'));
-  if (p.gq === 'city' || !p.lat) out.push(chip('Approx. location'));
+  if (p.gq === 'city' || !p.lat) out.push(chip('No map pin'));
   return out.join(' ');
 }
 const catLabel = p => (p.sc ? p.sc.replace(/_/g, ' ') : CAT_NAMES[p.c] || p.c);
@@ -188,8 +191,9 @@ function vToday() {
     <button class="btn sm loc" data-a="zonePick">📍 ${esc(locLabel())}</button></div>`;
   h += `<div class="scroller">${Array.from({ length: 10 }, (_, i) => addDays(t, i)).map(k =>
     `<button class="pill ${k === sel ? 'on' : ''}" data-a="selDay" data-d="${k}">${dayLabel(k)}${S.days[k]?.blocks.length ? ' ·' + S.days[k].blocks.length : ''}</button>`).join('')}</div>`;
-  if (sel === t) h += alertsHtml() + coverageHtml() + wxHtml() + needsHtml() + suggestHtml();
+  if (sel === t) h += alertsHtml() + coverageHtml() + wxHtml();
   h += dayHtml(sel);
+  if (sel === t) h += attentionHtml() + findHtml();
   return h;
 }
 A.selDay = ({ d }) => { sel = d; render(); };
@@ -207,28 +211,39 @@ function coverageHtml() {
 }
 function wxHtml() {
   const sun = sunToday();
-  if (!wx) return `<div class="card"><div class="sub">Sunrise ${fmtTime(sun.rise)} · Sunset ${fmtTime(sun.set)}</div></div>`;
-  const c = wx.current, dl = wx.daily, [txt, ic] = WXC(c.weather_code);
-  const dark = Date.now() > sun.set || Date.now() < sun.rise;
-  const tips = wxInsights(wx);
-  return `<div class="card"><div class="wx"><div class="wx-temp">${Math.round(c.temperature_2m)}°</div>
-    <div class="grow"><b>${txt} ${dark && ic === '☀️' ? '🌙' : ic}</b><div class="sub">Feels ${Math.round(c.apparent_temperature)}° · H ${Math.round(dl.temperature_2m_max[0])}° L ${Math.round(dl.temperature_2m_min[0])}° · Rain ${dl.precipitation_probability_max[0] ?? 0}%</div>
-    <div class="sub">Sunset ${fmtTime(sun.set)} · Sunrise ${fmtTime(sunTimes(new Date(Date.now() + DAY), here().lat, here().lng).rise)} · Wind ${Math.round(c.wind_speed_10m)} mph</div></div></div>
-    ${tips.length ? `<div class="wx-tip">${tips.map(esc).join('<br>')}</div>` : ''}</div>`;
+  if (!wx) return `<div class="wxline"><span>Sunset ${fmtTime(sun.set)}</span></div>`;
+  const c = wx.current, [txt, ic] = WXC(c.weather_code);
+  const night = Date.now() > sun.set || Date.now() < sun.rise;
+  const tip = wxInsights(wx)[0];
+  return `<div class="wxline" data-a="wxOpen"><span class="wxt">${night && ic === '☀️' ? '🌙' : ic} ${Math.round(c.temperature_2m)}°</span><span class="grow ell muted">${txt} · feels ${Math.round(c.apparent_temperature)}° · sunset ${fmtTime(sun.set)}</span><span class="faint">›</span></div>${tip ? `<div class="wxnote">${esc(tip)}</div>` : ''}`;
 }
-function needsHtml() {
-  const from = here(), now = Date.now();
-  const status = Object.entries(DUE).filter(([k]) => k !== 'mail' || S.last.mail).map(([k, [hrs, label]]) => {
-    const age = S.last[k] ? (now - S.last[k]) / HOUR : null;
-    const due = age == null || age > hrs;
-    return `<button class="chip ${due ? 'warn' : 'ok'}" data-a="quickLog" data-k="${k}">${label} · ${age == null ? 'log it' : fmtAgo(S.last[k])}</button>`;
-  });
-  status.push(`<button class="chip blue" data-a="tabTo" data-t="me">Next lift: ${esc(WORKOUTS[S.workout % 5].n)}</button>`);
-  const tiles = NEED_TILES.map(([t, label]) => {
-    const r = rank(t, { from, dur: 10 })[0];
-    return `<button class="need" data-a="needList" data-t="${t}"><span class="ic">${BT[t].ic}</span>${label}<span class="nx">${r ? fmtMi(r.mi) : '—'}</span></button>`;
-  }).join('');
-  return `<h2>Right now</h2><div class="chips" style="margin-bottom:10px">${status.join('')}</div><div class="needs">${tiles}</div>`;
+A.wxOpen = () => openSheet(() => {
+  const c = wx.current, dl = wx.daily, sun = sunToday(), [txt, ic] = WXC(c.weather_code);
+  return sheetHead(`${ic} ${Math.round(c.temperature_2m)}° ${txt}`, `Feels ${Math.round(c.apparent_temperature)}° · wind ${Math.round(c.wind_speed_10m)} mph`) +
+    `<dl class="kv"><dt>Today</dt><dd>H ${Math.round(dl.temperature_2m_max[0])}° · L ${Math.round(dl.temperature_2m_min[0])}° · rain ${dl.precipitation_probability_max[0] ?? 0}% · UV ${Math.round(dl.uv_index_max?.[0] ?? 0)}</dd>
+    <dt>Tomorrow</dt><dd>H ${Math.round(dl.temperature_2m_max[1])}° · L ${Math.round(dl.temperature_2m_min[1])}° · rain ${dl.precipitation_probability_max[1] ?? 0}%</dd>
+    <dt>Sun</dt><dd>sets ${fmtTime(sun.set)} · rises ${fmtTime(sunTimes(new Date(Date.now() + DAY), here().lat, here().lng).rise)}</dd></dl>` +
+    wxInsights(wx).map(t => `<p class="note">${esc(t)}</p>`).join('');
+});
+// "Worth doing now": one deduped list; skips anything already coming up in today's plan
+function attentionHtml() {
+  const day = getDay(today());
+  const planned = new Set((day?.blocks || []).filter(b => b.st === 'plan' || b.st === 'active').map(b => b.t));
+  const list = suggest().filter(([t]) => !planned.has(t) && !(t === 'shower' && planned.has('gym'))).slice(0, 3);
+  if (!list.length) return '';
+  return `<h2>Worth doing now</h2><div class="list">${list.map(([t, why]) => {
+    const r = rank(t)[0];
+    if (!r) return '';
+    const f = fit(r.p, Date.now(), BT[t].dur);
+    return `<div class="place" data-a="openPlace" data-id="${r.p.id}" data-t="${t}"><span style="font-size:22px;width:28px">${BT[t].ic}</span>
+      <div class="main"><div class="nm">${BT[t].n} <span class="muted small" style="font-weight:500">· ${esc(why)}</span></div>
+      <div class="meta ell">${esc(r.p.n)} · ${fmtMi(r.mi)}${f.k !== 'unk' ? ' · ' + esc(f.txt) : ''}</div></div>
+      <div class="side"><button class="btn sm primary" data-a="addBlock" data-t="${t}" data-poi="${r.p.id}" data-next="1">+ Add</button><button class="btn sm ghost" data-a="nav" data-id="${r.p.id}">Go</button></div></div>`;
+  }).join('')}</div>`;
+}
+function findHtml() {
+  const items = [['restroom', 'Restroom'], ['water', 'Water'], ['shower', 'Shower'], ['meal', 'Food'], ['office', 'Wi-Fi + power'], ['sleep', 'Sleep spot'], ['groc', 'Groceries'], ['laundry', 'Laundry'], ['grill', 'Grill'], ['car', 'Auto parts']];
+  return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${BT[t].ic} ${l}</button>`).join('')}</div>`;
 }
 A.tabTo = ({ t }) => { tab = t; render(); };
 A.needList = ({ t }) => openSheet(() => listSheet(t));
@@ -272,31 +287,48 @@ function suggestHtml() {
 }
 
 // ---------- day timeline
+let showAllTpl = false;
+function tplScore(tpl, date) {
+  const now = new Date(), h = date === today() ? now.getHours() + now.getMinutes() / 60 : 8;
+  const left = (24 - h) * 60;
+  const total = tpl.b.reduce((a, x) => { const [t, d] = x.split(':'); return a + (t === 'sleep' ? 0 : (d ? +d : BT[t].dur) + 10); }, 0);
+  let s = -Math.abs(total - Math.min(left, 14 * 60)) / 60;
+  if (tpl.id === 'blank' || tpl.id === 'car' || tpl.id === 'move') s -= 2;
+  if (h < 10 && /water_l/.test(tpl.b.join())) s += 1;
+  if (h >= 16 && tpl.id === 'tired') s += 2;
+  if (h < 16 && tpl.id === 'cash' && (D.dd[zoneOfPoint(here())?.id] || []).length) s += 0.5;
+  return s;
+}
 function dayHtml(date) {
   const day = getDay(date);
   const isToday = date === today();
   if (!day) {
     const prev = getDay(addDays(date, -1));
+    const ranked = TEMPLATES.slice().sort((a, b) => tplScore(b, date) - tplScore(a, date));
+    const card = (t, big) => `<button class="tpl${big ? ' big' : ''}" data-a="useTpl" data-id="${t.id}"><b>${esc(t.n)}</b><span>${t.b.map(x => BT[x.split(':')[0]].ic).join(' ')}</span>${big ? `<span>${esc(t.d)}</span>` : ''}</button>`;
     return `<h2>${isToday ? 'Build today' : 'Plan ' + dayLabel(date)}</h2>
-      ${prev ? `<button class="btn sm" data-a="copyDay" data-from="${prev.date}" data-to="${date}" style="margin-bottom:10px">Copy ${dayLabel(prev.date)}'s blocks</button>` : ''}
-      <div class="grid2">${TEMPLATES.map(t => `<button class="tpl" data-a="useTpl" data-id="${t.id}"><b>${esc(t.n)}</b><span>${esc(t.d)}</span></button>`).join('')}</div>`;
+      <div class="stack">${ranked.slice(0, 2).map(t => card(t, 1)).join('')}</div>
+      <div class="row wrap" style="margin-top:10px">${prev ? `<button class="btn sm" data-a="copyDay" data-from="${prev.date}" data-to="${date}">Copy ${dayLabel(prev.date)}</button>` : ''}<button class="btn sm" data-a="useTpl" data-id="blank">Start blank</button><button class="btn sm ghost" data-a="moreTpl">${showAllTpl ? 'Fewer day types' : 'More day types'}</button></div>
+      ${showAllTpl ? `<div class="grid2" style="margin-top:10px">${ranked.slice(2).filter(t => t.id !== 'blank').map(t => card(t)).join('')}</div>` : ''}`;
   }
   const rows = flow(day), o = dayOrigin(day);
   const firstPending = rows.find(r => !r.skip && r.b.st !== 'done');
-  let h = `<div class="top" style="margin-top:22px;margin-bottom:6px"><h2 style="margin:0">${isToday ? 'Your day' : dayLabel(date)}</h2>
+  let h = `<div class="top" style="margin-top:18px;margin-bottom:6px"><h2 style="margin:0">${isToday ? 'Your day' : dayLabel(date)}</h2>
     <div class="row"><button class="btn sm primary" data-a="route">▶ Route</button><button class="btn sm" data-a="dayMenu">•••</button></div></div>
     <div class="sub" style="margin-bottom:10px">${isToday ? 'From ' : `Starts ${fmtClock(day.startMin ?? 480)} from `}${esc(o.label)}</div><div class="tl">`;
-  rows.forEach(r => { h += blockHtml(r, day, r === firstPending, isToday); });
-  h += `</div><div class="row" style="margin-top:6px"><button class="btn big" data-a="addBlockSheet">+ Add block</button></div>`;
+  let prevPoi = null;
+  rows.forEach(r => { h += blockHtml(r, day, r === firstPending, isToday, prevPoi); if (!r.skip && r.b.poi) prevPoi = r.b.poi; });
+  h += `</div><button class="btn big" data-a="addBlockSheet" style="margin-top:4px">+ Add block</button>`;
   if (isToday && new Date().getHours() >= 17 && !getDay(addDays(date, 1))) h += `<button class="btn big ghost" data-a="selDay" data-d="${addDays(date, 1)}">Plan tomorrow →</button>`;
   return h;
 }
+A.moreTpl = () => { showAllTpl = !showAllTpl; render(); };
 function blockTitle(b) {
   if (b.t === 'travel') return 'Travel → ' + (Z[b.toZone]?.n || 'pick a zone');
   if (b.t === 'gym') return 'Gym + shower · ' + WORKOUTS[S.workout % 5].n;
   return b.label || BT[b.t].n;
 }
-function blockHtml(r, day, isNext, isToday) {
+function blockHtml(r, day, isNext, isToday, prevPoi) {
   const b = r.b, def = BT[b.t], p = b.poi && P[b.poi];
   const cls = b.st === 'active' ? 'active' : b.st === 'done' ? 'done' : r.skip ? 'skipped' : '';
   const leg = !r.skip && r.travel ? `<div class="travel">🚗 ${fmtDur(r.travel)} · ${fmtMi(r.miles)}</div>` : '';
@@ -311,7 +343,7 @@ function blockHtml(r, day, isNext, isToday) {
   return leg + `<div class="blk ${cls}"><div class="blk-time">${time}</div>
     <div class="blk-body" data-a="openBlock" data-id="${b.id}">
       <div class="blk-title"><span class="ic">${def.ic}</span><span class="grow ell">${esc(blockTitle(b))}</span>${b.st === 'active' ? chip(r.over ? 'Over' : 'Now', 'acc') : ''}${b.st === 'done' ? chip('Done', 'ok') : ''}${r.skip ? chip('Skipped') : ''}</div>
-      ${p ? `<div class="blk-place"><span class="grow ell"><span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span></span></div>` : ''}
+      ${p ? `<div class="blk-place"><span class="grow ell">${prevPoi === p.id ? `<span class="muted">Stay put · ${esc(p.n)}</span>` : `<span class="nm">${esc(p.n)}</span> <span class="muted">· ${esc(p.city || '')}</span>`}</span></div>` : ''}
       ${chips ? `<div class="chips" style="margin-top:6px">${chips}</div>` : ''}${warns}${acts}</div></div>`;
 }
 function findBlock(id) {
@@ -406,23 +438,21 @@ function blockSheet(id) {
   const def = BT[b.t], rows = flow(day), r = rows.find(x => x.b === b) || {}, p = b.poi && P[b.poi];
   const isToday = day.date === today();
   let h = sheetHead(`${def.ic} ${esc(blockTitle(b))}`, r.s ? `${dayLabel(day.date)} · ${fmtTime(r.s)}${b.t === 'sleep' ? '' : '–' + fmtTime(r.e)}` : dayLabel(day.date));
-  if (b.t !== 'sleep') h += `<div class="row" style="margin-bottom:10px"><div class="dur"><button data-a="dur" data-id="${id}" data-v="-15">−</button><span>${fmtDur(b.dur)}</span><button data-a="dur" data-id="${id}" data-v="15">+</button></div>
-    ${b.t.startsWith('water') ? `<button class="btn sm" data-a="durSet" data-id="${id}" data-v="75">S · 75m</button><button class="btn sm" data-a="durSet" data-id="${id}" data-v="150">M · 2.5h</button><button class="btn sm" data-a="durSet" data-id="${id}" data-v="270">L · 4.5h</button>` : ''}</div>`;
+  h += `<div class="row wrap" style="margin-bottom:10px">${b.t !== 'sleep' ? `<div class="dur"><button data-a="dur" data-id="${id}" data-v="-15">−</button><span>${fmtDur(b.dur)}</span><button data-a="dur" data-id="${id}" data-v="15">+</button></div>
+    ${b.t.startsWith('water') ? `<button class="btn sm" data-a="durSet" data-id="${id}" data-v="75">S</button><button class="btn sm" data-a="durSet" data-id="${id}" data-v="150">M</button><button class="btn sm" data-a="durSet" data-id="${id}" data-v="270">L</button>` : ''}` : ''}
+    <span class="grow"></span><button class="btn sm" data-a="moveBlk" data-id="${id}" data-v="-1" ${i === 0 ? 'disabled' : ''}>↑</button><button class="btn sm" data-a="moveBlk" data-id="${id}" data-v="1" ${i === day.blocks.length - 1 ? 'disabled' : ''}>↓</button><button class="btn sm" data-a="blockMenu" data-id="${id}">•••</button></div>`;
   if (def.hint) h += `<p class="note">${esc(def.hint)}</p>`;
   for (const w of r.warn || []) h += `<div class="warnline" style="margin-bottom:6px">⚠️ ${esc(w)}${p && /Closed|closes|Gate/.test(w) ? ` <button class="btn sm" data-a="fixBlk" data-id="${b.id}">Swap to an open place</button>` : ''}</div>`;
   if (b.t === 'gym') h += `<div class="card"><b>${esc(WORKOUTS[S.workout % 5].n)}</b><div class="note">${WORKOUTS[S.workout % 5].ex.map(esc).join(' · ')}</div></div>`;
   if (b.t === 'groc') { const low = SUPPLIES.filter(s => S.supplies[s]); if (low.length) h += `<div class="card"><b>Running low</b><div class="note">${low.map(esc).join(' · ')}</div></div>`; }
   if (b.t === 'dash') h += dashStart(b, r, p);
   if (b.t === 'travel') h += travelPicker(day, b);
-  const acts = [];
-  if (isToday && b.st === 'plan') acts.push(`<button class="btn primary" data-a="startBlk" data-id="${id}">Start now</button>`);
-  if (isToday && b.st !== 'done') acts.push(`<button class="btn ${b.st === 'active' ? 'primary' : ''}" data-a="doneBlk" data-id="${id}">✓ Done</button>`);
-  if (b.st === 'done') acts.push(`<button class="btn" data-a="reopenBlk" data-id="${id}">Reopen</button>`);
-  if (p) acts.push(`<button class="btn" data-a="nav" data-id="${p.id}">Directions</button>`);
-  acts.push(`<button class="btn" data-a="moveBlk" data-id="${id}" data-v="-1" ${i === 0 ? 'disabled' : ''}>↑ Earlier</button>`, `<button class="btn" data-a="moveBlk" data-id="${id}" data-v="1" ${i === day.blocks.length - 1 ? 'disabled' : ''}>↓ Later</button>`);
-  acts.push(`<button class="btn" data-a="skipBlk" data-id="${id}">${b.st === 'skip' ? 'Unskip' : 'Skip'}</button>`, `<button class="btn" data-a="nextDayBlk" data-id="${id}">→ Next day</button>`);
-  acts.push(`<button class="btn" data-a="dupBlk" data-id="${id}">Duplicate</button>`, `<button class="btn" data-a="delBlk" data-id="${id}" style="color:var(--bad)">Delete</button>`);
-  h += `<div class="acts">${acts.join('')}</div>`;
+  const prim = [];
+  if (isToday && b.st === 'plan') prim.push(`<button class="btn primary" data-a="startBlk" data-id="${id}">Start now</button>`);
+  if (isToday && b.st === 'active') prim.push(`<button class="btn primary" data-a="doneBlk" data-id="${id}">✓ Done</button>`);
+  if (b.st === 'done') prim.push(`<button class="btn" data-a="reopenBlk" data-id="${id}">Reopen</button>`);
+  if (p) prim.push(`<button class="btn ${prim.length ? '' : 'primary'}" data-a="nav" data-id="${p.id}">Directions</button>`);
+  if (prim.length) h += `<div class="acts">${prim.join('')}</div>`;
   if (def.m) {
     if (p) h += `<h2>Place</h2><div class="list">${placeRow({ p, mi: r.miles, at: r.s, dur: b.dur }, b.t, `<button class="btn sm" data-a="openPlace" data-id="${p.id}" data-t="${b.t}">Info</button>`)}</div>`;
     const prevPt = (() => { let pt = dayOrigin(day).pt; for (const x of rows) { if (x.b === b) break; const q = !x.skip && blockPoint(x.b); if (q) pt = q; } return pt; })();
@@ -431,11 +461,20 @@ function blockSheet(id) {
   }
   return h;
 }
+A.blockMenu = ({ id }) => openSheet(() => {
+  const { day, b } = findBlock(id);
+  return sheetHead(esc(blockTitle(b)), 'Block options') + `<div class="stack">
+    ${day.date === today() && b.st === 'plan' ? `<button class="btn big" data-a="doneBlk" data-id="${id}">✓ Mark done</button>` : ''}
+    <button class="btn big" data-a="skipBlk" data-id="${id}">${b.st === 'skip' ? 'Unskip' : 'Skip for today'}</button>
+    <button class="btn big" data-a="nextDayBlk" data-id="${id}">Move to ${dayLabel(addDays(day.date, 1))}</button>
+    <button class="btn big" data-a="dupBlk" data-id="${id}">Duplicate</button>
+    <button class="btn big" data-a="delBlk" data-id="${id}" style="color:var(--bad)">Delete block</button></div>`;
+});
 A.dur = ({ id, v }) => { const { b } = findBlock(id); b.dur = Math.max(5, b.dur + +v); b.durSet = true; save(); refresh(); };
 A.durSet = ({ id, v }) => { const { b } = findBlock(id); b.dur = +v; b.durSet = true; if (b.t === 'water_s' && +v >= 180) b.t = 'water_l'; else if (b.t === 'water_l' && +v < 180) b.t = 'water_s'; save(); refresh(); };
 A.pickPlace = ({ blk, id }) => { const { b } = findBlock(blk); b.poi = id; b.pinned = true; save(); closeSheet(); toast('Set: ' + P[id].n); };
 A.moveBlk = ({ id, v }) => { const { day, i } = findBlock(id); const j = i + +v; if (j < 0 || j >= day.blocks.length) return; [day.blocks[i], day.blocks[j]] = [day.blocks[j], day.blocks[i]]; save(); refresh(); };
-A.skipBlk = ({ id }) => { const { b } = findBlock(id); b.st = b.st === 'skip' ? 'plan' : 'skip'; save(); refresh(); };
+A.skipBlk = ({ id }) => { const { b } = findBlock(id); b.st = b.st === 'skip' ? 'plan' : 'skip'; save(); closeSheet(true); };
 A.reopenBlk = ({ id }) => { const { b } = findBlock(id); b.st = 'plan'; delete b.s0; delete b.s1; save(); refresh(); };
 A.delBlk = ({ id }) => { const { day, b, i } = findBlock(id); day.blocks.splice(i, 1); save(); closeSheet(true); toast('Block deleted', () => day.blocks.splice(i, 0, b)); };
 A.dupBlk = ({ id }) => { const { day, b, i } = findBlock(id); day.blocks.splice(i + 1, 0, { ...b, id: uid(), st: 'plan', s0: undefined, s1: undefined }); save(); closeSheet(true); };
@@ -461,9 +500,8 @@ function travelPicker(day, b) {
 A.setZone = ({ blk, z }) => { const { day, b } = findBlock(blk); b.toZone = z; b.durSet = false; autofill(day); refresh(); toast('Later blocks re-picked around ' + Z[z].n); };
 
 // add blocks
-A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${Object.entries(BT).map(([t, d]) => `<button data-a="addBlock" data-t="${t}"><span class="ic">${d.ic}</span>${esc(d.n)}</button>`).join('')}</div>
-  <h2>Presets</h2><div class="stack">${[['Water S', 'water_s', 75], ['Water L', 'water_l', 240], ['Local café', 'cafe', 150], ['Panera', 'office', 240], ['Deep work', 'deep', 270], ['DoorDash', 'dash', 210], ['PF', 'gym', 80], ['Car maintenance', 'car', 240]]
-    .map(([n, t, m]) => `<button class="tpl" data-a="addBlock" data-t="${t}" data-dur="${m}"><b>${n} · ${fmtDur(m)}</b><span>${esc(BT[t].hint || '')}</span></button>`).join('')}</div>`);
+const PALETTE = ['water_s', 'water_l', 'cafe', 'office', 'deep', 'light', 'dash', 'gym', 'meal', 'grill', 'travel', 'sleep', 'car', 'water', 'groc', 'laundry', 'mail', 'shower', 'restroom', 'fun', 'social', 'free'];
+A.addBlockSheet = () => openSheet(() => sheetHead('Add a block', dayLabel(sel)) + `<div class="palette">${PALETTE.map(t => `<button data-a="addBlock" data-t="${t}"><span class="ic">${BT[t].ic}</span>${esc(BT[t].n)}${BT[t].dur ? `<span class="tiny faint" style="display:block">${fmtDur(BT[t].dur)}</span>` : ''}</button>`).join('')}</div>`);
 A.addBlock = ({ t, poi, dur, next }) => {
   const date = sel;
   const day = S.days[date] ||= { date, startMin: date === today() ? new Date().getHours() * 60 + new Date().getMinutes() : 480, blocks: [] };

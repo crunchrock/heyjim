@@ -183,3 +183,10 @@ a.btn { text-decoration: none; }
 .grid2 > .card { margin-top: 0; }
 .map-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7); }
 .btn.loc { max-width: 52vw; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+.wxline { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 14px; box-shadow: var(--shadow); padding: 10px 14px; font-size: 14px; margin-top: 4px; }
+.wxline .wxt { font-weight: 700; font-size: 16px; white-space: nowrap; }
+.wxnote { font-size: 13px; color: var(--muted); margin: 8px 4px 0; }
+.tpl.big { padding: 15px; }
+.tpl.big b { font-size: 17px; margin-bottom: 4px; }
+.tpl span { display: block; margin-top: 2px; }
+.place .side .btn + .btn { margin-top: 2px; }
