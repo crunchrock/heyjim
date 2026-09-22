@@ -498,6 +498,46 @@ function specialsAt(p, ts = Date.now()) {
   const now = today.find(x => x.s && x.e && min >= hm(x.s) && min < (hm(x.e) <= hm(x.s) ? hm(x.e) + 1440 : hm(x.e))) || null;
   return { today, now };
 }
+// the special's label, or a sensible one from its window (lunch / happy hour / late night)
+const hmm = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+// drinks → happy hour (late if it starts 9p+); food at midday → lunch special; otherwise "Special"
+const DRINK_RX = /happy hour|drink|beer|draft|draught|pint|cocktail|wine|well|shot|margarita|mimosa|bloody|tito|vodka|whisk|tequila|rum|seltzer|pbr|domestic|bucket/i;
+function specialLabel(x, p) {
+  if (x.l) return x.l;
+  const s = x.s ? hmm(x.s) : null, txt = (x.items || []).join(' ');
+  if (DRINK_RX.test(txt) || (p && p.c === 'social')) return s != null && s >= 21 * 60 ? 'Late-night happy hour' : 'Happy hour';
+  if (s != null && s >= 10 * 60 + 30 && s <= 13 * 60 + 30) return 'Lunch special';
+  return 'Special';
+}
+const specialWhat = x => x.items?.[0] || x.l || 'Special';
+// a place's specials at a moment: running now (+ until when, minutes left), the next one today, all of today's
+function specialState(p, ts = Date.now()) {
+  const st = specialsAt(p, ts);
+  if (!st.today.length) return { now: null, next: null, today: [] };
+  const { min } = tzParts(new Date(ts), p.ct);
+  let now = null, next = null;
+  if (st.now) { const s = hmm(st.now.s); let e = hmm(st.now.e); if (e <= s) e += 1440; now = { x: st.now, until: e, left: e - min }; }
+  for (const x of st.today) {
+    if (!x.s || x === st.now) continue;
+    const s = hmm(x.s);
+    if (s > min && (!next || s < next.start)) next = { x, start: s, end: x.e ? hmm(x.e) : null, in: s - min };
+  }
+  return { now, next, today: st.today };
+}
+// specials around a point: on now (nearest first), then starting within the next few hours
+function specialsNear(from = here(), ts = Date.now(), maxMi = 10, soonMin = 180) {
+  const on = [], soon = [];
+  for (const p of D.pois) {
+    if (!p.sp?.length || S.avoid[p.id] || p.use === 'known_unavailable') continue;
+    const pt = ptOf(p); if (!pt || pt.approx) continue;
+    const mi = hav(from, pt); if (mi > maxMi) continue;
+    const ss = specialState(p, ts);
+    if (ss.now) on.push({ p, mi, ss });
+    else if (ss.next && ss.next.in <= soonMin) soon.push({ p, mi, ss });
+  }
+  on.sort((a, b) => a.mi - b.mi); soon.sort((a, b) => a.ss.next.start - b.ss.next.start || a.mi - b.mi);
+  return { on, soon };
+}
 const dayNames = ds => { const n = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; return ds?.length ? ds.map(d => n[d]).join('/') : 'Daily'; };
 const isClub = p => p.sc === 'strip_club' || p.tags.includes('strip_club') || p.bd?.k === 'strip_club';
 function barBonus(p, at) {
@@ -553,7 +593,7 @@ const BT = {
   dash: { n: 'DoorDash', ic: '🚗', dur: 210, log: 'dash', m: p => !!p._dd || p.tags.includes('door_dash') || p.c === 'doordash_cluster', b: p => (p._dd ? 5 + (p._dd.score || 0) / 20 : 0), caps: [], hint: 'One peak block. Don\'t chase red zones 20 miles away.' },
   gym: { n: 'Gym + shower', ic: '🏋️', dur: 80, log: 'gym', m: hasCap('gym'), b: p => (is247(p) ? 3 : 0), caps: ['gym', 'shower'], hint: '' },
   shower: { n: 'Shower', ic: '🚿', dur: 30, log: 'shower', m: p => p.caps.shower || p.am.includes('shower'), b: p => (p.caps.shower ? 2 : 0), caps: ['shower'], hint: 'Outdoor beach showers count too.' },
-  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => p.c === 'food' && !/walmart|grocery|trader|publix|sprouts|whole_foods/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat), b: (p, at) => valueScore(p) + (p.caps.ramen ? 1 : 0) + (specialsAt(p, at).today.length ? 4 : 0), caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
+  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => p.c === 'food' && !/walmart|grocery|trader|publix|sprouts|whole_foods/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat), b: (p, at) => { const sa = specialsAt(p, at); return valueScore(p) + (p.caps.ramen ? 1 : 0) + (sa.now ? 7 : sa.today.length ? 3 : 0); }, caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
   grill: { n: 'Grill dinner', ic: '🔥', dur: 90, log: 'water', m: p => p.caps.public_grill || p.am.includes('grill'), b: p => wfBonus(p), caps: ['public_grill'], hint: 'Charcoal, foil, lighter. Check fire rules.' },
   car: { n: 'Car work', ic: '🔧', dur: 120, log: 'car', m: hasCap('auto_parts', 'repair_support', 'auto_service', 'loan_tools'), b: p => (p.caps.loan_tools || p.x.tools ? 3 : 0) + (p.x.lotRepair ? 3 : 0), caps: ['auto_parts', 'loan_tools', 'repair_support'], hint: 'Parts run + lot work. Test drive after.' },
   water: { n: 'Water refill', ic: '💧', dur: 15, log: 'water_refill', m: hasCap('buy_drinking_water', 'water_source_candidate'), b: () => 0, caps: ['buy_drinking_water', 'water_source_candidate'], hint: '3-gal jug at the refill machine (~$1.50).' },

@@ -379,10 +379,10 @@ function placeChips(p, type, ts, dur) {
     if (f.pl >= 3) out.push(chip('Pricey', 'warn'));
   }
   if (p.sp?.length || p.bd) {
-    const sp = specialsAt(p, ts || Date.now());
-    const what = x => x.items?.[0] || x.l || 'Special';
-    if (sp.now) out.push(chip('🍹 Now: ' + (sp.now.items?.length ? sp.now.items : [what(sp.now)]).slice(0, 2).join(', '), 'acc'));
-    else if (sp.today.length) out.push(chip('Tonight: ' + sp.today.map(x => (x.s ? fmtClock(+x.s.split(':')[0] * 60 + +x.s.split(':')[1]) + ' ' : '') + what(x)).join(' · '), 'acc'));
+    const ss = specialState(p, ts || Date.now());
+    if (ss.now) out.push(liveChip(ss.now, p));
+    else if (ss.next) out.push(chip(`${specialLabel(ss.next.x, p)} ${fmtClock(ss.next.start)}${ss.next.end != null ? '–' + fmtClock(ss.next.end) : ''} · ${specialWhat(ss.next.x)}`, 'acc'));
+    else if (ss.today.length) out.push(chip('Today: ' + ss.today.map(specialWhat).slice(0, 2).join(' · '), 'acc'));
     else if (p.sp?.length) out.push(chip('Specials ' + [...new Set(p.sp.map(x => dayNames(x.d)))].join(', ')));
     if (p.bd?.k) out.push(chip(p.bd.k.replace(/_/g, ' ')));
   }
@@ -392,10 +392,13 @@ function placeChips(p, type, ts, dur) {
   if (p.gq === 'city' || !p.lat) out.push(chip('No map pin'));
   return out.join(' ');
 }
+// a special running right now: lit up, with when it ends
+const liveChip = (n, p) => `<span class="chip live"><i class="dot"></i>${esc(specialLabel(n.x, p))} now · until ${fmtClock(n.until)}${n.x.items?.[0] ? ' · ' + esc(n.x.items[0]) : ''}</span>`;
+const isLive = (p, ts) => !!(p.sp?.length && specialState(p, ts || Date.now()).now);
 const catLabel = p => (p.sc ? p.sc.replace(/_/g, ' ') : CAT_NAMES[p.c] || p.c);
 function placeRow(r, type, extra = '') {
   const p = r.p;
-  return `<div class="place" data-a="openPlace" data-id="${p.id}"${type ? ` data-t="${type}"` : ''}>
+  return `<div class="place${isLive(p, r.at) ? ' live' : ''}" data-a="openPlace" data-id="${p.id}"${type ? ` data-t="${type}"` : ''}>
     <div class="main"><div class="nm">${esc(p.n)}</div><div class="meta">${esc(catLabel(p))} · ${esc(p.city || p._z?.n || '')}</div>
     <div class="chips" style="margin-top:6px">${placeChips(p, type, r.at, r.dur)}</div></div>
     <div class="side"><span class="dist">${r.approx || (r.p.lat == null) ? '<span class="tiny muted">no pin</span>' : r.mi != null ? fmtMi(r.mi) : ''}</span>${extra || `<button class="btn sm go" data-a="nav" data-id="${p.id}">Go</button>`}</div></div>`;
@@ -419,12 +422,23 @@ function vToday() {
     <button class="btn sm loc" data-a="zonePick">📍 ${esc(locLabel())}</button></div>`;
   h += `<div class="scroller">${Array.from({ length: 10 }, (_, i) => addDays(t, i)).map(k =>
     `<button class="pill ${k === sel ? 'on' : ''}" data-a="selDay" data-d="${k}">${dayLabel(k)}${S.days[k]?.blocks.length ? '<i class="pdot"></i>' : ''}</button>`).join('')}</div>`;
-  if (sel === t) h += zoneBanner() + alertsHtml() + coverageHtml() + hereHtml() + wxHtml();
+  if (sel === t) h += zoneBanner() + alertsHtml() + coverageHtml() + hereHtml() + wxHtml() + specialsStrip();
   h += dayHtml(sel);
   if (sel === t) h += attentionHtml() + findHtml();
   return h;
 }
 A.selDay = ({ d }) => { sel = d; render(); };
+// "Specials now": one scrolling row, lit-up cards for what's on now, then what starts soon
+function specialsStrip() {
+  const { on, soon } = specialsNear(liveLoc() || here());
+  const items = [...on, ...soon].slice(0, 8);
+  if (!items.length) return '';
+  return `<div class="scroller spx-row">${items.map(({ p, mi, ss }) => {
+    const n = ss.now, x = n ? n.x : ss.next.x;
+    const when = n ? `until ${fmtClock(n.until)}` : `${fmtClock(ss.next.start)}${ss.next.end != null ? '–' + fmtClock(ss.next.end) : ''}`;
+    return `<div class="spx${n ? ' live' : ''}" data-a="openPlace" data-id="${p.id}"><div class="spx-t">${n ? '<i class="dot"></i>' : ''}${esc(specialLabel(x, p))} · ${when}</div><div class="spx-n ell">${esc(p.n)}</div><div class="spx-i ell">${esc(specialWhat(x))}</div><div class="spx-m">${fmtMi(mi)} · ${esc(catLabel(p))}</div></div>`;
+  }).join('')}<button class="spx more" data-a="needList" data-t="specials">All specials →</button></div>`;
+}
 function zoneBanner() {
   const z = zoneOverride();
   if (!z) return '';
@@ -540,8 +554,8 @@ function attentionHtml() {
   }).join('')}</div>`;
 }
 function findHtml() {
-  const items = [['deep', 'Work spot'], ['water_s', 'Water spot'], ['restroom', 'Restroom'], ['gas', 'Gas'], ['meal', 'Food'], ['ddd', "Guy's picks"], ['pizza', 'Pizza'], ['crave', 'Cravings'], ['meat', 'Meat deals'], ['run', 'Trail runs'], ['wonder', 'Springs & wonders'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['tony', "Tony's picks"], ['mall', 'Malls'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars'], ['goth', 'Goth'], ['ladies', "Ladies' nights"], ['clubs', 'Clubs']] : []), ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
-  return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${t === 'ddd' ? GUY_SVG : t === 'tony' ? TONY_SVG : { crave: '🍔', ladies: '💃', clubs: '🍸', goth: '🦇' }[t] || BT[t].ic} ${l}</button>`).join('')}<button class="pill" data-a="addPlace">＋ Add a place</button></div>`;
+  const items = [['specials', 'Specials now'], ['deep', 'Work spot'], ['water_s', 'Water spot'], ['restroom', 'Restroom'], ['gas', 'Gas'], ['meal', 'Food'], ['ddd', "Guy's picks"], ['pizza', 'Pizza'], ['crave', 'Cravings'], ['meat', 'Meat deals'], ['run', 'Trail runs'], ['wonder', 'Springs & wonders'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['tony', "Tony's picks"], ['mall', 'Malls'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars'], ['goth', 'Goth'], ['ladies', "Ladies' nights"], ['clubs', 'Clubs']] : []), ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
+  return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${t === 'ddd' ? GUY_SVG : t === 'tony' ? TONY_SVG : { crave: '🍔', ladies: '💃', clubs: '🍸', goth: '🦇', specials: '🍹' }[t] || BT[t].ic} ${l}</button>`).join('')}<button class="pill" data-a="addPlace">＋ Add a place</button></div>`;
 }
 // lists by tag (not block types): Guy Fieri picks, cult chains + quirky spots
 const TAG_LISTS = {
@@ -560,6 +574,14 @@ const notListed = (t, blk) => `<button class="btn big ghost" data-a="addPlace" $
 A.tabTo = ({ t }) => { tab = t; render(); };
 A.needList = ({ t }) => openSheet(() => listSheet(t));
 function listSheet(t, limit = 25) {
+  if (t === 'specials') {
+    const from = liveLoc() || here(), { on, soon } = specialsNear(from, Date.now(), 15, 12 * 60);
+    const row = ({ p, mi, ss }) => placeRow({ p, mi }, p.c === 'social' ? 'social' : 'meal');
+    return sheetHead('🍹 Specials', 'Lunch specials and happy hours near ' + esc(locLabel())) +
+      `<h2>On now · ${on.length}</h2><div class="list">${on.map(row).join('') || '<div class="empty">Nothing running right now nearby.</div>'}</div>` +
+      `<h2>Later today · ${soon.length}</h2><div class="list">${soon.map(row).join('') || '<div class="empty">No more known specials today nearby.</div>'}</div>` +
+      '<p class="tiny faint" style="margin-top:10px">Each special shows when it was posted and a link to its source on the place page.</p>';
+  }
   if (TAG_LISTS[t]) {
     const [, n, sub] = TAG_LISTS[t], rows = tagRows(t).slice(0, 40);
     return sheetHead(({ ddd: GUY_SVG, tony: TONY_SVG, crave: '🍔', ladies: '💃', clubs: '🍸', goth: '🦇' }[t] || '') + ' ' + n, sub) + `<div class="list">${rows.map(r => placeRow(r, ['ladies', 'clubs', 'goth'].includes(t) ? 'social' : 'meal')).join('') || '<div class="empty">None in the data yet.</div>'}</div>` + notListed('food');
