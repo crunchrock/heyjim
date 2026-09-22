@@ -2,6 +2,7 @@
 # Screenshot the real app at iPhone size (390x844): build/test/ui/shot.sh <name> "<query>"  ->  build/test/ui/out/<name>.png
 # query: reset=1 (fresh state) lat=..&lng=.. (fake GPS) theme=dark tpl=<template id> do=block&i=<n> | do=tab&t=map|places|me |
 #        do=list&t=<block type> | do=act&name=<A action> (dataset = the query) | do=add | do=dev | do=zone&z=<zone> | do=pid&id=<poi id> | scroll=<px> (page) ss=<px> (sheet)
+#        cat=<Places category, with do=tab&t=places> act2=<a second A action after do=, same dataset> (e.g. do=act&name=needList&t=night&act2=nightDay&d=2026-09-25)
 # Needs Chrome. Run `node build/test/ui/mk.mjs` after each build first. Screenshots use a 390px iframe because headless
 # Chrome won't make a window narrower than ~500px.
 HERE="$(cd "$(dirname "$0")" && pwd)"; OUT="$HERE/out"; mkdir -p "$OUT"

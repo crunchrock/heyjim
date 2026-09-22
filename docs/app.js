@@ -204,7 +204,7 @@ A.close = () => closeSheet(true);
 A.back = () => closeSheet();
 let dragEnd = 0, lastTap = { k: '', t: 0 };
 // read-only / navigation actions may repeat; everything else ignores an identical second tap within 600ms (no duplicate blocks)
-const REPEATABLE = new Set(['dur', 'moveBlk', 'back', 'close', 'selDay', 'placesCat', 'mapFilter', 'tabTo', 'reconBad', 'reconWhy', 'kindPick']);
+const REPEATABLE = new Set(['dur', 'moveBlk', 'back', 'close', 'selDay', 'placesCat', 'mapFilter', 'tabTo', 'reconBad', 'reconWhy', 'kindPick', 'nightDay']);
 document.addEventListener('click', e => {
   if (Date.now() - dragEnd < 350) { e.preventDefault(); e.stopPropagation(); return; }
   const tb = e.target.closest('#tabs button');
@@ -379,13 +379,12 @@ function placeChips(p, type, ts, dur) {
     if (f.pl >= 3) out.push(chip('Pricey', 'warn'));
   }
   if (p.sp?.length || p.bd) {
-    const ss = specialState(p, ts || Date.now());
-    if (ss.now) out.push(liveChip(ss.now, p));
-    else if (ss.next) out.push(chip(`${specialLabel(ss.next.x, p)} ${fmtClock(ss.next.start)}${ss.next.end != null ? '–' + fmtClock(ss.next.end) : ''} · ${specialWhat(ss.next.x)}`, 'acc'));
-    else if (ss.today.length) out.push(chip('Today: ' + ss.today.map(specialWhat).slice(0, 2).join(' · '), 'acc'));
-    else if (p.sp?.some(x => !x.dt)) out.push(chip('Specials ' + [...new Set(p.sp.filter(x => !x.dt).map(x => dayNames(x.d)))].join(', ')));
+    // every special that day with its window (the running one lit, first), not just the next one; max 3 to stay compact
+    const es = daySpecials(p, ts || Date.now()), cur = es.filter(e => !e.past);
+    for (const e of cur.slice(0, 3)) out.push(spChip(e, p, 44));
+    if (!cur.length && p.sp?.some(x => !x.dt && !x.unk)) out.push(chip('Specials ' + [...new Set(p.sp.filter(x => !x.dt && !x.unk).map(x => dayNames(x.d)))].join(', ')));
     const ev = (p.sp || []).filter(x => x.dt && x.dt >= dayKey()).sort((a, z) => a.dt.localeCompare(z.dt))[0];
-    if (ev && !ss.today.includes(ev)) out.push(chip(`${new Date(ev.dt + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: ${ev.l || 'Event'}`, 'acc'));
+    if (ev && !es.some(e => e.x === ev)) out.push(chip(`${new Date(ev.dt + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: ${ev.l || 'Event'}`, 'acc'));
     if (p.bd?.k) out.push(chip(p.bd.k.replace(/_/g, ' ')));
   }
   for (const [t, c] of wfChips(p).slice(0, type && /water|grill/.test(type) ? 4 : 2)) out.push(chip(t, c));
@@ -395,8 +394,7 @@ function placeChips(p, type, ts, dur) {
   if (p.gq === 'city' || !p.lat) out.push(chip('No map pin'));
   return out.join(' ');
 }
-// a special running right now: lit up, with when it ends
-const liveChip = (n, p) => `<span class="chip live"><i class="dot"></i>${esc(specialLabel(n.x, p))} now · until ${fmtClock(n.until)}${n.x.items?.[0] ? ' · ' + esc(n.x.items[0]) : ''}</span>`;
+// a special running right now lights the whole row up (the chip itself is spChip)
 const isLive = (p, ts) => !!(p.sp?.length && specialState(p, ts || Date.now()).now);
 const catLabel = p => (p.sc ? p.sc.replace(/_/g, ' ') : CAT_NAMES[p.c] || p.c);
 function placeRow(r, type, extra = '') {
@@ -556,9 +554,10 @@ function attentionHtml() {
       <div class="side"><button class="btn sm primary" data-a="addBlock" data-t="${t}" data-poi="${r.p.id}" data-next="1">+ Add</button><button class="btn sm ghost" data-a="nav" data-id="${r.p.id}">Go</button></div></div>`;
   }).join('')}</div>`;
 }
+// Night out (bars, happy hours, clubs, goth, ladies' nights, arcades) is one pill, shown every day: it's a lookup, not a plan
 function findHtml() {
-  const items = [['specials', 'Specials now'], ['deep', 'Work spot'], ['water_s', 'Water spot'], ['restroom', 'Restroom'], ['gas', 'Gas'], ['meal', 'Food'], ['ddd', "Guy's picks"], ['pizza', 'Pizza'], ['crave', 'Cravings'], ['meat', 'Meat deals'], ['run', 'Trail runs'], ['wonder', 'Springs & wonders'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['tony', "Tony's picks"], ['mall', 'Malls'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ...(new Date().getDay() ? [['social', 'Bars'], ['goth', 'Goth'], ['ladies', "Ladies' nights"], ['clubs', 'Clubs']] : []), ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
-  return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${t === 'ddd' ? GUY_SVG : t === 'tony' ? TONY_SVG : { crave: '🍔', ladies: '💃', clubs: '🍸', goth: '🦇', specials: '🍹' }[t] || BT[t].ic} ${l}</button>`).join('')}<button class="pill" data-a="addPlace">＋ Add a place</button></div>`;
+  const items = [['specials', 'Specials now'], ['night', 'Night out'], ['deep', 'Work spot'], ['water_s', 'Water spot'], ['restroom', 'Restroom'], ['gas', 'Gas'], ['meal', 'Food'], ['ddd', "Guy's picks"], ['pizza', 'Pizza'], ['crave', 'Cravings'], ['meat', 'Meat deals'], ['run', 'Trail runs'], ['wonder', 'Springs & wonders'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['tony', "Tony's picks"], ['mall', 'Malls'], ['kava', 'Kava / tea'], ['panera', 'Panera'], ['sleep', 'Sleep spot'], ['shower', 'Shower'], ['water', 'Drinking water'], ['library', 'Library'], ['grill', 'Grill'], ['books', 'Bookstores'], ['groc', 'Supply run'], ['vape', 'Vape shops'], ['laundry', 'Laundry'], ['car', 'Auto parts']];
+  return `<h2>Find nearby</h2><div class="scroller">${items.map(([t, l]) => `<button class="pill" data-a="needList" data-t="${t}">${t === 'ddd' ? GUY_SVG : t === 'tony' ? TONY_SVG : { crave: '🍔', specials: '🍹', night: '🌃' }[t] || BT[t].ic} ${l}</button>`).join('')}<button class="pill" data-a="addPlace">＋ Add a place</button></div>`;
 }
 // lists by tag (not block types): Guy Fieri picks, cult chains + quirky spots
 const TAG_LISTS = {
@@ -575,8 +574,9 @@ function tagRows(k, from = here()) {
 }
 const notListed = (t, blk) => `<button class="btn big ghost" data-a="addPlace" ${blk ? `data-blk="${blk}"` : ''} ${t ? `data-kind="${t}"` : ''} style="margin-top:10px">Not listed? Search any place or save where you are →</button>`;
 A.tabTo = ({ t }) => { tab = t; render(); };
-A.needList = ({ t }) => openSheet(() => listSheet(t));
+A.needList = ({ t }) => { if (t === 'night') nightSel = today(); openSheet(() => listSheet(t)); };
 function listSheet(t, limit = 25) {
+  if (t === 'night') return nightOutSheet();
   if (t === 'specials') {
     const from = liveLoc() || here(), { on, soon } = specialsNear(from, Date.now(), 15, 12 * 60);
     const row = ({ p, mi, ss }) => placeRow({ p, mi }, p.c === 'social' ? 'social' : 'meal');
@@ -606,6 +606,115 @@ function listSheet(t, limit = 25) {
 const showtimesUrl = p => p.x.theater?.url || (p.web ? p.web : 'https://www.google.com/search?q=' + encodeURIComponent(p.n + ' showtimes today'));
 const showtimesBtn = p => `<a class="btn sm primary" href="${esc(showtimesUrl(p))}" target="_blank" rel="noopener">🎟️ Showtimes</a>`;
 const MINE_FOR = { movie: 'movie', arcade: 'arcade', sleep: 'hotel', cafe: 'cafe', kava: 'kava', panera: 'cafe', library: 'library', deep: 'cafe', light: 'cafe', water_s: 'water', water_work: 'water', water_l: 'water', grill: 'water', meal: 'food', meat: 'food', pizza: 'pizza', social: 'bar', gym: 'gym', shower: 'gym', run: 'run', fun: 'fun', wonder: 'fun', groc: 'groc', gas: 'gas', laundry: 'laundry' };
+
+// ---------- NIGHT OUT: one evening at a glance (tonight or any of the next 6 days, Sunday too).
+// Sections come from nightOut() in core.js; the Bar night auto-pick rules are untouched.
+let nightSel = null;
+const nightDate = () => (nightSel && nightSel >= today() ? nightSel : (nightSel = today()));
+const NIGHT_SECS = { hh: ['🍹', 'Happy hours'], clubs: ['🍸', 'Strip clubs'], goth: ['🦇', 'Goth'], ladies: ['💃', "Ladies' nights"], bars: ['🍺', 'Bars'], arcade: ['👾', 'Arcades / barcades'] };
+// "4–7p", "11:30a–2p", "from 10:30p"
+function winTxt(s, e) {
+  if (s == null) return '';
+  const a = fmtClock(s);
+  if (e == null) return 'from ' + a;
+  const b = fmtClock(e);
+  return (a.slice(-1) === b.slice(-1) ? a.slice(0, -1) : a) + '–' + b;
+}
+const clip = (s, n = 64) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+// one special (from daySpecials): lit while it runs ("Happy hour now · until 7p"), else its window; buffets get 🍽️
+function spChip(e, p, n = 64) {
+  const x = e.x, base = specialLabel(x, p), lbl = (isBuffetSp(x) ? '🍽️ ' : '') + base;
+  // the first item, minus what the label already says ("Taco Tuesday (prices not published)" → "prices not published")
+  let i0 = x.items?.[0] || '';
+  const I = i0.toLowerCase(), k = I.indexOf(base.toLowerCase());
+  if (base.toLowerCase().includes(I)) i0 = '';
+  else if (k >= 0) i0 = i0.slice(0, k) + i0.slice(k + base.length);
+  i0 = i0.replace(/^[\s(),.;:–—-]+|[\s(),.;:–—-]+$/g, '').replace(/[()]/g, '');
+  const it = i0 ? ' · ' + clip(i0, n) : '';
+  if (e.live) return `<span class="chip live"><i class="dot"></i>${esc(lbl)} now · until ${fmtClock(e.e)}${esc(it)}</span>`;
+  const w = winTxt(e.s, e.e);
+  return chip(lbl + (w ? ' ' + w : '') + it, e.past ? '' : 'acc');
+}
+// a club's / restaurant's posted buffet for that weekday: "🍽️ Lunch buffet 11:30a–3p · $10"
+function bufChips(p, dow) {
+  const b = p.x.buffet;
+  if (!b) return [];
+  const m = /^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})/.exec(b.lh || ''), win = m ? ' ' + winTxt(hmm(m[1]), hmm(m[2])) : '';
+  const out = [];
+  if ((dow === 0 || dow === 6) && b.w != null) out.push('🍽️ Weekend buffet · ' + money(b.w));
+  else {
+    if (b.l != null || m) out.push(`🍽️ Lunch buffet${win}${b.l != null ? ' · ' + money(b.l) : ''}`);
+    if (b.d != null) out.push('🍽️ Dinner buffet · ' + money(b.d));
+  }
+  return (out.length ? out : ['🍽️ Buffet · price unknown']).map(t => chip(t, 'ok'));
+}
+// hours that evening: tonight = open now / opens at; another day = that weekday's posted hours
+function dayHoursChip(p, date, tonight, loud) {
+  if (tonight) {
+    // an evening lookup: a bar that opens later today isn't bad news, only one that stays shut tonight is
+    const st = hoursState(p);
+    if (st.k === 'unknown') return loud ? chip('Hours not listed') : '';
+    if (st.k === 'closed') return /opens \d/.test(st.txt) ? chip(st.txt.replace('Closed · opens', 'Opens')) : chip('Closed tonight', 'bad');
+    return hoursChip(p, Date.now(), 0, true);
+  }
+  if (!p.h) return loud ? chip('Hours not listed') : '';
+  if (is247(p)) return chip('Open 24h', 'ok');
+  const dow = new Date(dateTs(date, 720)).getDay(), v = p.h[dow];
+  if (v == null) return loud ? chip('Hours not listed') : '';
+  return /closed/i.test(v) ? chip('Closed ' + WD[dow], 'bad') : chip(WD[dow] + ' ' + prettyHours(v), 'ok');
+}
+function rateChip(p) {
+  const r = p.bd?.r ?? p.fv?.r, rc = p.bd?.r != null ? p.bd.rc : p.fv?.rc;
+  return r ? chip(`★${r}${rc ? ' (' + (rc >= 1000 ? (rc / 1000).toFixed(1) + 'k' : rc) + ')' : ''}`, r >= 4.5 ? 'ok' : '') : '';
+}
+// how often a night really happens, when the source says ("2nd Sunday of every month", "one dated instance")
+const cadence = x => (x.items || []).find(i => /month|dated instance|confirmed date|one.off|cadence|recurr|annual/i.test(i)) || '';
+// a goth venue with nothing that day: when its nights are
+function otherNights(p) {
+  const wk = (p.sp || []).filter(x => !x.dt && !x.unk && x.d?.length).slice(0, 2).map(x => chip(`${specialLabel(x, p)} · ${dayNames(x.d)}`));
+  const ev = (p.sp || []).filter(x => x.dt && x.dt >= today()).sort((a, z) => a.dt.localeCompare(z.dt))[0];
+  if (ev) wk.push(chip(`${new Date(ev.dt + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: ${ev.l || 'Event'}`, 'acc'));
+  return wk;
+}
+const nightOpts = (N, k) => ({ date: N.date, tonight: N.tonight, dow: N.dow, max: k === 'clubs' ? 6 : 2, buf: k === 'clubs', loud: k === 'clubs', note: k === 'goth', other: k === 'goth' });
+function nightRow(r, o) {
+  const p = r.p, sp = r.sp || [], live = o.tonight && sp.some(e => e.live);
+  const chips = [...sp.slice(0, o.max).map(e => spChip(e, p, 44)), ...(o.other && !sp.length ? otherNights(p) : []), ...(o.buf ? bufChips(p, o.dow) : []), dayHoursChip(p, o.date, o.tonight, o.loud), rateChip(p)].filter(Boolean).join(' ');
+  const note = o.note ? sp.map(e => cadence(e.x)).find((c, i) => c && c !== sp[i].x.items[0]) : '';
+  return `<div class="place${live ? ' live' : ''}" data-a="openPlace" data-id="${p.id}"><div class="main"><div class="nm">${esc(p.n)}</div><div class="meta">${esc(catLabel(p))} · ${esc(p.city || p._z?.n || '')}</div>
+    ${chips ? `<div class="chips">${chips}</div>` : ''}${note ? `<div class="tiny faint" style="margin-top:5px">${esc(note)}</div>` : ''}</div>
+    <div class="side"><span class="dist">${r.approx || p.lat == null ? '<span class="tiny muted">no pin</span>' : fmtMi(r.mi)}</span><button class="btn sm go" data-a="nav" data-id="${p.id}">Go</button>${o.tonight && r.mi <= 30 ? `<button class="btn sm ghost" data-a="nightAdd" data-id="${p.id}">+ Tonight</button>` : ''}</div></div>`;
+}
+// a section: title + count, the nearest few, "See all →" when there are more; empty sections vanish unless `empty` says why
+function nightSection(N, k, n, empty, see) {
+  const [ic, name] = NIGHT_SECS[k], rows = N[k].rows;
+  if (!rows.length && !empty) return '';
+  const more = see || (rows.length > n ? `data-a="nightSec" data-k="${k}"` : '');
+  const wide = (k === 'hh' || k === 'bars') && N[k].r > 15 ? ` within ${N[k].r} mi` : '';
+  return `<div class="sec"><h2>${ic} ${name} <span class="cnt">· ${rows.length}${wide}</span></h2>${more ? `<button class="btn sm ghost" ${more}>See all →</button>` : ''}</div>` +
+    (rows.length ? `<div class="list">${rows.slice(0, n).map(r => nightRow(r, nightOpts(N, k))).join('')}</div>` : empty);
+}
+function nightHub() {
+  const date = nightDate(), t = today(), N = nightOut(liveLoc() || here(), date), when = N.tonight ? 'tonight' : 'on ' + WD[N.dow];
+  let h = `<div class="scroller" style="margin-top:4px">${Array.from({ length: 7 }, (_, i) => addDays(t, i)).map((k, i) =>
+    `<button class="pill ${k === date ? 'on' : ''}" data-a="nightDay" data-d="${k}">${i ? WD[new Date(dateTs(k, 720)).getDay()] : 'Tonight'}</button>`).join('')}</div>`;
+  h += nightSection(N, 'hh', 5, `<div class="list"><div class="empty">No happy hours in the data within ${N.hh.r} mi ${when}.</div></div>`);
+  const cn = N.clubs.nearest;
+  h += nightSection(N, 'clubs', 5, cn.length ? `<p class="note" style="margin-top:0">No clubs within 30 mi · nearest: ${esc(cn[0].p.n)} (${Math.round(cn[0].mi)} mi)</p><div class="list">${cn.map(r => nightRow(r, nightOpts(N, 'clubs'))).join('')}</div>`
+    : '<div class="list"><div class="empty">No clubs in the data yet.</div></div>', cn.length ? 'data-a="needList" data-t="clubs"' : '');
+  h += nightSection(N, 'goth', 3) + nightSection(N, 'ladies', 3) + nightSection(N, 'bars', 6) + nightSection(N, 'arcade', 3);
+  return h + '<p class="tiny faint" style="margin-top:12px">Only specials with a known day show here. Tap a place for the source and when each special was posted and checked.</p>';
+}
+const nightOutSheet = () => sheetHead('🌃 Night out', esc(locLabel()) + ' · nearest first') + nightHub();
+function nightSecSheet(k) {
+  const N = nightOut(liveLoc() || here(), nightDate()), [ic, name] = NIGHT_SECS[k], sec = N[k], rows = sec.rows.length ? sec.rows : sec.nearest || [];
+  return sheetHead(`${ic} ${name}`, `${N.tonight ? 'Tonight' : WD[N.dow]} · ${sec.rows.length ? 'within ' + sec.r + ' mi of ' : 'nearest to '}${esc(locLabel())}`) +
+    `<div class="list">${rows.slice(0, 60).map(r => nightRow(r, nightOpts(N, k))).join('') || '<div class="empty">None in the data.</div>'}</div>` + notListed(k === 'arcade' ? 'arcade' : 'bar');
+}
+A.nightDay = ({ d }) => { nightSel = d; refresh(); };
+A.nightSec = ({ k }) => { if (NIGHT_SECS[k]) openSheet(() => nightSecSheet(k)); };
+// "+ Tonight": a Bar night block at this place on today's plan (an arcade block for a plain arcade)
+A.nightAdd = ({ id }) => { const p = P[id]; if (!p) return; sel = today(); A.addBlock({ t: isArcade(p) && !BT.social.m(p) ? 'arcade' : 'social', poi: id }); };
 function suggest() {
   const now = new Date(), h = now.getHours() + now.getMinutes() / 60, out = [];
   const sun = sunToday(), toSunset = (sun.set - now) / HOUR;
@@ -1082,6 +1191,8 @@ A.addBlock = ({ t, poi, dur, next, auto }) => {
   if (poi && P[poi]) { b.poi = poi; b.pinned = true; }
   if (t === 'travel') b.toZone = nextZone(1, startForNew(date))?.id;
   let at = day.blocks.findIndex(x => x.t === 'sleep');
+  // a night out goes before the at-your-spot blocks (car office, gaming, bedtime dev): out first, then back to the spot
+  if (t === 'social' || t === 'arcade') { const ni = day.blocks.findIndex(x => BT[x.t]?.night && x.st === 'plan'); if (ni >= 0 && (at < 0 || ni < at)) at = ni; }
   if (next) at = day.blocks.findIndex(x => x.st === 'plan');
   if (t === 'sleep' || at < 0) at = day.blocks.length;
   day.blocks.splice(at, 0, b);
@@ -1442,12 +1553,15 @@ function mailHtml(p) {
 const prettyHours = h => (h == null ? 'unknown' : h === '00:00-24:00' ? 'Open 24h' : String(h).replace(/(\d{1,2}):(\d{2})(\+1)?/g, (m, hh, mm) => fmtClock(+hh * 60 + +mm)).replace(/-/g, '–').replace(/;/g, ', '));
 function barHtml(p) {
   const b = p.bd || {}, fmtD = d => (d ? new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null);
-  const t = x => (x ? fmtClock(+x.split(':')[0] * 60 + +x.split(':')[1]) : '');
-  return (p.bd ? `<h2>Bar</h2><div class="card"><div class="chips">${b.k ? chip(b.k.replace(/_/g, ' ')) : ''} ${b.pl ? chip('$'.repeat(b.pl)) : ''} ${b.r ? chip(`★${b.r}${b.rc ? ' · ' + b.rc : ''}`, 'ok') : ''}</div>
-    ${b.vibe ? `<p class="note">${esc(b.vibe)}</p>` : ''}${b.games ? `<p class="note">Games: ${esc(b.games)}</p>` : ''}${b.food ? `<p class="note">Food: ${esc(b.food)}</p>` : ''}</div>` : '') + `
-    <h2>${p.c === 'social' ? 'Specials' : 'Deals'}</h2>${p.sp?.length ? p.sp.map(x => `<div class="card"><b>${esc(x.l || 'Special')}</b> <span class="muted small">· ${x.dt ? new Date(x.dt + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : x.unk ? 'day unconfirmed' : dayNames(x.d)}${x.s ? ' ' + t(x.s) + (x.e ? '–' + t(x.e) : '') : ''}</span>
+  // every special with its day(s) + window + source; today's first (lit while it runs)
+  const td = daySpecials(p), on = new Set(td.filter(e => e.live).map(e => e.x)), tdx = new Set(td.map(e => e.x));
+  const list = (p.sp || []).slice().sort((a, z) => tdx.has(z) - tdx.has(a));
+  return (p.bd ? `<h2>${isClub(p) ? 'Club' : 'Bar'}</h2><div class="card"><div class="chips">${b.k ? chip(b.k.replace(/_/g, ' ')) : ''} ${b.pl ? chip('$'.repeat(b.pl)) : ''} ${b.r ? chip(`★${b.r}${b.rc ? ' · ' + b.rc : ''}`, 'ok') : ''}</div>
+    ${b.vibe ? `<p class="note">${esc(b.vibe)}</p>` : ''}${b.games ? `<p class="note">Games: ${esc(b.games)}</p>` : ''}${b.food === true ? '<p class="note">Serves food</p>' : b.food ? `<p class="note">Food: ${esc(b.food)}</p>` : ''}</div>` : '') + `
+    <h2>${p.c === 'social' ? 'Specials' : 'Deals'}</h2>${list.length ? list.map(x => `<div class="card"><b>${isBuffetSp(x) ? '🍽️ ' : ''}${esc(x.l || 'Special')}</b> <span class="muted small">· ${x.dt ? new Date(x.dt + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : x.unk ? 'day unconfirmed' : dayNames(x.d)}${x.s ? ' ' + winTxt(hmm(x.s), x.e ? hmm(x.e) : null) : ''}</span>
+      ${on.has(x) ? ' <span class="chip live"><i class="dot"></i>On now</span>' : tdx.has(x) ? ' ' + chip('Today', 'acc') : ''}
       ${x.items?.length ? `<div class="note">${x.items.map(esc).join(' · ')}</div>` : ''}
-      <div class="tiny faint" style="margin-top:4px">${x.posted ? 'Posted ' + fmtD(x.posted) + ' · ' : 'Post date unknown · '}checked ${fmtD(x.checked) || '?'}${x.conf ? ' · ' + x.conf.replace(/_/g, ' ') : ''}${x.src && D.sources[x.src] ? ` · <a href="${esc(D.sources[x.src][1])}" target="_blank" rel="noopener">source</a>` : ''}</div></div>`).join('') : '<p class="note">No current specials found. Worth asking the bartender.</p>'}`;
+      <div class="tiny faint" style="margin-top:4px">${x.posted ? 'Posted ' + fmtD(x.posted) + ' · ' : 'Post date unknown · '}checked ${fmtD(x.checked) || '?'}${x.conf ? ' · ' + x.conf.replace(/_/g, ' ') : ''}${x.src && D.sources[x.src] ? ` · <a href="${esc(D.sources[x.src][1])}" target="_blank" rel="noopener">source ↗</a>` : ''}</div></div>`).join('') : '<p class="note">No current specials found. Worth asking the bartender.</p>'}`;
 }
 function foodHtml(f) {
   return `<h2>Food</h2><div class="card"><div class="chips">${chip(f.k || 'food')} ${f.ramen ? chip('Ramen', 'acc') : ''} ${f.buf ? chip('Buffet', 'acc') : ''} ${f.ayce ? chip('All you can eat', 'acc') : ''} ${f.min ? chip('from $' + f.min, 'ok') : ''}</div>
@@ -1475,7 +1589,7 @@ A.copy = async ({ v }) => { try { await navigator.clipboard.writeText(v); toast(
 
 // ---------- PLACES
 function vPlaces() {
-  const cats = [['', 'Nearby'], ['water_work', 'Water'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['ddd', "Guy's picks"], ['pizza', 'Pizza'], ['crave', 'Cravings'], ['sleep', 'Sleep'], ['tony', "Tony's picks"], ['run', 'Trail runs'], ['wonder', 'Springs & wonders'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['grill', 'Grills'], ['car', 'Car'], ['laundry', 'Laundry'], ['mail', 'Mail'], ['fun', 'Fun'], ['social', 'Bars'], ['goth', 'Goth'], ['ladies', "Ladies' nights"], ['clubs', 'Clubs'], ['meat', 'Meat deals'], ['kava', 'Kava / tea'], ['books', 'Bookstores'], ['groc', 'Groceries'], ['vape', 'Vape'], ['mine', 'Your places'], ['fav', '★ Saved']];
+  const cats = [['', 'Nearby'], ['night', 'Night out'], ['water_work', 'Water'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['ddd', "Guy's picks"], ['pizza', 'Pizza'], ['crave', 'Cravings'], ['sleep', 'Sleep'], ['tony', "Tony's picks"], ['run', 'Trail runs'], ['wonder', 'Springs & wonders'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['grill', 'Grills'], ['car', 'Car'], ['laundry', 'Laundry'], ['mail', 'Mail'], ['fun', 'Fun'], ['social', 'Bars'], ['goth', 'Goth'], ['ladies', "Ladies' nights"], ['clubs', 'Clubs'], ['meat', 'Meat deals'], ['kava', 'Kava / tea'], ['books', 'Bookstores'], ['groc', 'Groceries'], ['vape', 'Vape'], ['mine', 'Your places'], ['fav', '★ Saved']];
   return `<div class="top"><h1>Places</h1><div class="row"><button class="btn sm primary" data-a="addPlace">＋ Add</button><button class="btn sm" data-a="zonePick">📍 ${esc(locLabel())}</button></div></div>
     <div class="search"><input class="field" id="placesQ" type="search" placeholder="Search ${D.pois.length} places, cities, zones" value="${esc(placesQ)}"></div>
     <div class="scroller" style="margin-top:10px">${cats.map(([k, l]) => `<button class="pill ${placesCat === k ? 'on' : ''}" data-a="placesCat" data-k="${k}">${l}</button>`).join('')}</div>
@@ -1490,6 +1604,7 @@ function placesResults() {
     const zh = D.zones.filter(z => z.n.toLowerCase().includes(q));
     return (zh.length ? `<h2>Zones</h2><div class="list">${zh.map(zoneRow).join('')}</div>` : '') + `<h2>${hits.length} places</h2><div class="list">${hits.map(r => placeRow(r)).join('') || '<div class="empty">No matches in the app.</div>'}</div><button class="btn big" data-a="addPlace" data-q="${esc(placesQ)}" style="margin-top:10px">Search "${esc(placesQ)}" anywhere + add it →</button>`;
   }
+  if (placesCat === 'night') return nightHub();
   if (TAG_LISTS[placesCat]) return `<div class="list" style="margin-top:10px">${tagRows(placesCat, from).slice(0, 60).map(r => placeRow(r, 'meal')).join('') || '<div class="empty">None in the data yet.</div>'}</div>`;
   if (placesCat === 'mine') {
     const ms = D.pois.filter(p => p.mine).map(p => ({ p, mi: hav(from, p) })).sort((a, b) => a.mi - b.mi);
@@ -1527,7 +1642,7 @@ A.navZone = ({ z }) => navigate([zoneDest(Z[z])]);
 // ---------- MAP (Leaflet, lazy)
 let map, tiles, markers, planLayer;
 const CAT_COLOR = { mine: '#E8475F', shop: '#9B51E0', waterfront: '#2F80ED', work: '#8E6CEF', gym: '#E8475F', food: '#F2994A', overnight_candidate: '#5B5BD6', car_maintenance: '#7D7D7D', camping: '#27AE60', mail: '#B8741A', fun: '#16A085', social: '#D35400', life_support: '#3AB0D8', doordash_cluster: '#E8475F' };
-const MAP_FILTERS = [['all', 'All'], ['water_s', 'Water'], ['grill', 'Grills'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['ddd', "Guy's"], ['tony', "Tony's"], ['pizza', 'Pizza'], ['sleep', 'Sleep'], ['run', 'Trails'], ['wonder', 'Springs'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['social', 'Bars'], ['car', 'Car'], ['laundry', 'Laundry'], ['fun', 'Fun'], ['mine', 'Yours'], ['fav', '★']];
+const MAP_FILTERS = [['all', 'All'], ['water_s', 'Water'], ['grill', 'Grills'], ['cafe', 'Cafés'], ['panera', 'Panera'], ['library', 'Libraries'], ['gym', 'PF'], ['meal', 'Food'], ['ddd', "Guy's"], ['tony', "Tony's"], ['pizza', 'Pizza'], ['sleep', 'Sleep'], ['run', 'Trails'], ['wonder', 'Springs'], ['movie', 'Movies'], ['arcade', 'Arcades'], ['social', 'Bars'], ['night', 'Night out'], ['car', 'Car'], ['laundry', 'Laundry'], ['fun', 'Fun'], ['mine', 'Yours'], ['fav', '★']];
 function vMap() {
   return `<div class="map-ui"><div class="scroller">${MAP_FILTERS.map(([k, l]) => `<button class="pill ${mapFilter === k ? 'on' : ''}" data-a="mapFilter" data-k="${k}">${l}</button>`).join('')}</div></div>
     <button class="map-fab" data-a="mapLocate">◎</button>`;
@@ -1560,7 +1675,7 @@ async function initMap() {
 }
 function drawMarkers() {
   markers.clearLayers(); planLayer.clearLayers();
-  const m = mapFilter === 'all' ? () => true : mapFilter === 'fav' ? p => S.fav[p.id] : mapFilter === 'mine' ? p => p.mine : TAG_LISTS[mapFilter] ? TAG_LISTS[mapFilter][0] : BT[mapFilter]?.m || (() => true);
+  const m = mapFilter === 'all' ? () => true : mapFilter === 'night' ? isNightSpot : mapFilter === 'fav' ? p => S.fav[p.id] : mapFilter === 'mine' ? p => p.mine : TAG_LISTS[mapFilter] ? TAG_LISTS[mapFilter][0] : BT[mapFilter]?.m || (() => true);
   for (const p of D.pois) {
     if (p.lat == null || !m(p) || S.avoid[p.id]) continue;
     L.circleMarker([p.lat, p.lng], { radius: S.fav[p.id] || isGuy(p) ? 9 : 7, color: isGuy(p) ? '#F4511E' : '#fff', weight: isGuy(p) ? 3 : 2, fillColor: CAT_COLOR[p.c] || '#888', fillOpacity: 0.95 })

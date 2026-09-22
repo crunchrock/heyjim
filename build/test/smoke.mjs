@@ -8,7 +8,7 @@ const ctx = vm.createContext({
   navigator: {}, document: {}, fetch: async () => ({ ok: true, arrayBuffer: async () => fs.readFileSync('docs/data.enc') }),
   setTimeout, clearTimeout,
 });
-vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, D: () => D, P, Z, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, addDays, hoursState, fit, TEMPLATES, BT, weekStats, logEntry, packPrompt, coverage, fixBlock, dayOrigin };', ctx);
+vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, D: () => D, P, Z, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, addDays, hoursState, fit, TEMPLATES, BT, weekStats, logEntry, packPrompt, coverage, fixBlock, dayOrigin, nightOut, specialsAt, daySpecials, isDrinkSp, isBuffetSp, isClub, isGoth, barBonus, dateTs };', ctx);
 const $ = ctx.__;
 const secret = JSON.parse(fs.readFileSync('build/secret.json', 'utf8'));
 const buf = await $.fetchEnc();
@@ -38,3 +38,42 @@ console.log('\nPF Palm Coast hours', pf.h, '\n Fri 8:30p:', $.hoursState(pf, fri
 const park = Object.values($.P).find(p => p.h && /sunset/.test(p.h.join()));
 console.log('park', park.n, park.h[5], '| 6:45p fit 90m:', JSON.stringify($.fit(park, new Date('2026-09-18T18:45:00-04:00').getTime(), 90)));
 console.log('coverage Miami:', JSON.stringify($.coverage({ lat: 25.76, lng: -80.19 })).slice(0, 80));
+// ---- Night out hub: a lookup for any evening (Sunday too); the Bar night auto-pick rules stay exactly as they are
+let fails = 0;
+const ok = (c, msg) => { console.log((c ? '  ok   ' : '  FAIL ') + msg); if (!c) fails++; };
+console.log('\nNight out');
+const JAX = { lat: 30.332, lng: -81.656, t: Date.now() }, TPA = { lat: 27.95, lng: -82.457, t: Date.now() }, TLH = { lat: 30.438, lng: -84.281, t: Date.now() };
+const dayOn = dow => { let d = $.addDays($.today(), 1); while (new Date($.dateTs(d, 720)).getDay() !== dow) d = $.addDays(d, 1); return d; };
+const TUE = dayOn(2), SUN = dayOn(0), MON = dayOn(1), at = (d, h) => $.dateTs(d, h * 60);
+$.S.loc = JAX;
+const nj = $.nightOut(JAX, TUE);
+ok(!nj.tonight && nj.dow === 2, `a Tuesday (${TUE}) is built as that day, not tonight`);
+ok(nj.hh.rows.length > 0, `Jacksonville Tuesday: ${nj.hh.rows.length} happy hours within ${nj.hh.r} mi (${nj.hh.rows.slice(0, 3).map(r => r.p.n).join(', ')})`);
+ok(nj.hh.rows.every(r => !$.isClub(r.p) && r.sp.length && r.sp.every(e => $.isDrinkSp(e.x, r.p))), 'happy hours: drink specials only, never a club');
+const starts = nj.hh.rows.map(r => r.sp[0].s ?? 1e4);
+ok(starts.every((s, i) => !i || s >= starts[i - 1]), 'another day: happy hours sorted by start time');
+ok(nj.clubs.rows.length > 0 && nj.clubs.rows.every(r => r.mi <= 30), `Jacksonville clubs within 30 mi: ${nj.clubs.rows.map(r => r.p.n).join(', ')}`);
+ok(nj.clubs.rows.every(r => r.sp.length === $.specialsAt(r.p, at(TUE, 12)).today.length), 'club rows carry all of that day\'s specials');
+const nt = $.nightOut(TPA, TUE);
+ok(nt.clubs.rows.every(r => r.sp.every(e => !e.x.d?.length || e.x.d.includes(2))), `Tampa Tuesday club specials are Tuesday's: ${nt.clubs.rows.flatMap(r => r.sp.map(e => r.p.n.split(' ').slice(0, 2).join(' ') + ': ' + (e.x.l || ''))).join(' | ') || 'none'}`);
+const ns = $.nightOut(JAX, SUN);
+ok(ns.dow === 0 && ns.hh.rows.length + ns.clubs.rows.length + ns.bars.rows.length > 0, `Sunday still shows the hub: ${ns.hh.rows.length} happy hours, ${ns.clubs.rows.length} clubs, ${ns.bars.rows.length} bars`);
+ok([...ns.bars.rows, ...nj.bars.rows].every(r => !$.isClub(r.p)), 'the bars section never lists a club');
+const nl = $.nightOut(TLH, TUE);
+ok(!nl.clubs.rows.length && nl.clubs.nearest.length === 3 && nl.clubs.nearest[0].mi > 30, `Tallahassee: no clubs within 30 mi; nearest ${nl.clubs.nearest.map(r => r.p.n + ' ' + Math.round(r.mi) + ' mi').join(', ')}`);
+ok([...nl.goth.rows, ...nj.goth.rows].every(r => $.isGoth(r.p) && r.mi <= 60), 'goth rows are goth venues within 60 mi');
+const g = r => (r.sp[0].live ? 0 : r.sp[0].soon ? 1 : 2), tn = $.nightOut(JAX, $.today());
+ok(tn.tonight && tn.hh.rows.every((r, i, a) => !i || g(r) >= g(a[i - 1])), `tonight: happy hours on now, then later today, then untimed (${tn.hh.rows.filter(r => r.sp[0].live).length} on now)`);
+const monthly = { sp: [{ l: 'Goth night', d: [0], s: '21:00', items: ['2nd Sunday of every month'] }] };
+ok($.specialsAt(monthly, new Date(2026, 9, 11, 20).getTime()).today.length === 1 && $.specialsAt(monthly, new Date(2026, 9, 18, 20).getTime()).today.length === 0, '"2nd Sunday of every month" shows on Oct 11, not on Oct 18');
+ok($.specialsAt({ sp: [{ l: 'Crux', d: [6], items: ['last Saturday of every other month'] }] }, new Date(2026, 9, 3, 20).getTime()).today.length === 1, 'a cadence the text cannot pin down still shows (the row carries the note)');
+ok(!$.isDrinkSp({ l: 'Lunch special', items: ['2 single-topping slices + a drink $11.47'] }, { c: 'food' }) && $.isDrinkSp({ l: 'Sunday brunch specials', items: ['$3 mimosas'] }, { c: 'social' }), 'a meal that comes with a drink is not a happy hour; $3 mimosas is');
+const bufClub = { sp: [{ l: 'Lunch buffet', d: [2], s: '12:00', e: '15:00', items: ['$10'] }, { l: '2-for-1 drinks', d: [2], s: '18:00', e: '22:00' }] };
+const bs = $.daySpecials(bufClub, at(TUE, 13));
+ok($.isBuffetSp(bs[0].x) && bs[0].live && bs[1].soon && !$.isDrinkSp(bs[0].x, { c: 'social' }), 'a club lunch buffet is live at 1p and listed before the evening drink special');
+const club = Object.values($.P).find(p => $.isClub(p) && !p.sp?.length && !(p.bd?.r >= 4.5));
+const bar = Object.values($.P).find(p => $.BT.social.m(p) && !$.isClub(p) && !p.sp?.length);
+ok($.barBonus(club, at(MON, 20)) === -8 && $.barBonus(club, at(SUN, 20)) === -18, `Bar night auto-pick unchanged: a club is -8 on Monday, -18 on Sunday (${club.n})`);
+ok($.barBonus(bar, at(SUN, 20)) === $.barBonus(bar, at(MON, 20)) - 10, `Bar night auto-pick unchanged: Sunday costs a bar 10 (${bar.n})`);
+if (fails) { console.log(`\n${fails} night-out check(s) FAILED`); process.exit(1); }
+console.log('night out: all ok');

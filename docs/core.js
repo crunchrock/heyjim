@@ -468,7 +468,7 @@ const DEV_KINDS = [
   ['pf', '🏋️', 'Car office at a PF lot, then lift + shower', p => !!p.caps.gym, 120, 0],
   ['mall', '🛍️', 'Malls / food courts', p => isMall(p), 120, 0],
   ['food', '🍜', 'Eat + laptop', p => isRestaurant(p) && !isMall(p), 105, -2],
-  ['bar', '🍺', 'Bars / social spots', p => isSocial(p), 120, -2],
+  ['bar', '🍺', 'Bars / social spots', p => isSocial(p) && !isClub(p), 120, -2],
 ];
 const devKind = p => DEV_KINDS.find(k => k[3](p));
 // cheap + loved beats fancy: rating, price level, "known for cheap", Asian preference
@@ -502,13 +502,24 @@ function runBonus(p) {
   if (/paved|asphalt|sidewalk/i.test(t.surface || '')) s -= 2;
   return s;
 }
+const spText = x => [x.l, ...(x.items || [])].filter(Boolean).join(' ');
+// "2nd Sunday of every month" / "First Friday of every month only": true only in that week of the month.
+// Cadences the text can't pin down ("last Saturday of every other month") pass, and the row shows the note.
+const NTH = { first: 1, '1st': 1, second: 2, '2nd': 2, third: 3, '3rd': 3, fourth: 4, '4th': 4, last: -1 };
+const NTH_RX = /\b(first|1st|second|2nd|third|3rd|fourth|4th|last)\s+(?:sun|mon|tue|wed|thu|fri|sat)[a-z]*\s+(?:of\s+)?(?:every|each|the|a)\s+month\b/i;
+function monthlyOk(x, d) {
+  const m = spText(x).match(NTH_RX);
+  if (!m) return true;
+  const n = NTH[m[1].toLowerCase()], day = d.getDate();
+  return n === -1 ? day + 7 > new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() : Math.ceil(day / 7) === n;
+}
 // bar specials on a given moment (in the bar's timezone): {today: [...], now: special|null}
 function specialsAt(p, ts = Date.now()) {
   if (!p.sp?.length) return { today: [], now: null };
   const { dow, min } = tzParts(new Date(ts), p.ct);
-  // weekly specials by weekday; one-off events (dt) only on their date
+  // weekly specials by weekday; one-off events (dt) only on their date; monthly ones only in their week
   const dd = new Date(ts), ymd = `${dd.getFullYear()}-${pad(dd.getMonth() + 1)}-${pad(dd.getDate())}`;
-  const today = p.sp.filter(x => !x.unk && (x.dt ? x.dt === ymd : !x.d?.length || x.d.includes(dow)));
+  const today = p.sp.filter(x => !x.unk && (x.dt ? x.dt === ymd : !x.d?.length || x.d.includes(dow)) && monthlyOk(x, dd));
   const hm = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
   const now = today.find(x => x.s && x.e && min >= hm(x.s) && min < (hm(x.e) <= hm(x.s) ? hm(x.e) + 1440 : hm(x.e))) || null;
   return { today, now };
@@ -553,7 +564,7 @@ function specialsNear(from = here(), ts = Date.now(), maxMi = 10, soonMin = 180)
   on.sort((a, b) => a.mi - b.mi); soon.sort((a, b) => a.ss.next.start - b.ss.next.start || a.mi - b.mi);
   return { on, soon };
 }
-const dayNames = ds => { const n = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; return ds?.length ? ds.map(d => n[d]).join('/') : 'Daily'; };
+const dayNames = ds => { const n = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; return ds?.length && new Set(ds).size < 7 ? ds.map(d => n[d]).join('/') : 'Daily'; };
 const isClub = p => p.sc === 'strip_club' || p.tags.includes('strip_club') || p.bd?.k === 'strip_club';
 function barBonus(p, at) {
   const dow = new Date(at).getDay(), sp = specialsAt(p, at);
@@ -565,6 +576,64 @@ function barBonus(p, at) {
   if (p.bd?.r >= 4.5) s += 2;
   if (dow === 0) s -= 10; // not on a Sunday night
   return s;
+}
+
+// ---------- night out: one evening's happy hours, strip clubs, goth, ladies' nights, bars and arcades near a point.
+// A lookup for any day, Sunday included. The Bar night auto-pick rules (barBonus above) are separate and unchanged.
+const isNightSpot = p => isSocial(p) || isClub(p) || isGoth(p) || isArcade(p);
+const isLadiesSp = x => /ladies/i.test(x.l || '');
+const isBuffetSp = x => /buffet/i.test(spText(x));
+// a drink deal: labelled happy hour / late night, or the text names drinks (word-bounded, so "as well" or "pinto" don't count)
+const HH_RX = /happy.?hours?|late.night|liquid lunch|\b(drinks?|beers?|drafts?|draughts?|pints?|cocktails?|wines?|wino|well drinks?|wells|shots?|margaritas?|mimosas?|bloody marys?|tito'?s|vodka|whiske?y|tequila|rum|gin|negroni|martinis?|mules?|seltzers?|pbr|bud( light)?|red stripe|jameson|domestics?|buckets?|pitchers?|kegs?|crowlers?|growlers?|guinness|bourbon|sangria|thirsty|2.for.1|bogo)\b/i;
+// a meal that comes with a drink ("2 slices + a drink", "two tacos plus one draft beer") is a food deal, not a happy hour
+const COMBO_RX = /(\+|\bplus\b|\bwith\b|\band\b)\s+(an?|one|1)\s+(\w+\s+)?(drink|soda|draft|beer|pint)/i;
+const isDrinkSp = (x, p) => !isLadiesSp(x) && !isBuffetSp(x) && (/happy.?hour|late.night/i.test(specialLabel(x, p)) || (HH_RX.test(spText(x)) && !COMBO_RX.test(spText(x))));
+// one day's specials at a place with their windows (minutes, end may pass midnight). With `live`, each is marked
+// running now / coming up / over relative to ts; sorted running → coming up → untimed → over (else by start time).
+function daySpecials(p, ts = Date.now(), live = true) {
+  const list = specialsAt(p, ts).today;
+  if (!list.length) return [];
+  const { min } = tzParts(new Date(ts), p.ct);
+  const g = a => (a.live ? 0 : a.soon ? 1 : a.past ? 3 : 2);
+  return list.map(x => {
+    const s = x.s ? hmm(x.s) : null;
+    let e = x.e && s != null ? hmm(x.e) : null;
+    if (e != null && e <= s) e += 1440;
+    return { x, s, e, live: live && e != null && min >= s && min < e, past: live && e != null && min >= e, soon: live && s != null && s > min };
+  }).sort((a, b) => g(a) - g(b) || (a.s ?? 1e4) - (b.s ?? 1e4));
+}
+// date = a planning-day key: today means tonight (live states from `now`), any other day lists that day's specials.
+// Every section is nearest first; each row is {p, mi, approx, sp: that day's matching specials}.
+function nightOut(from = here(), date = today(), now = Date.now()) {
+  // venues are judged on their evening (6p+ tonight, 8p another day); specials on the whole day
+  const tonight = date === today(), ts = tonight ? now : dateTs(date, 12 * 60), eve = tonight ? Math.max(now, dateTs(date, 18 * 60)) : dateTs(date, 20 * 60);
+  const dow = new Date(dateTs(date, 12 * 60)).getDay(), byMi = (a, b) => a.mi - b.mi;
+  const pool = [];
+  for (const p of D.pois) {
+    if (S.avoid[p.id] || p.use === 'known_unavailable') continue;
+    const pt = ptOf(p);
+    if (pt) pool.push({ p, mi: hav(from, pt), approx: !!pt.approx });
+  }
+  const cache = new Map(), spOf = p => { if (!cache.has(p.id)) cache.set(p.id, p.sp?.length ? daySpecials(p, ts, tonight) : []); return cache.get(p.id); };
+  // happy hours at bars and restaurants (clubs have their own section): tonight = on now, later, untimed; another day = by start
+  const hhAll = pool.filter(r => r.p.sp?.length && !r.approx && !isClub(r.p)).map(r => ({ ...r, sp: spOf(r.p).filter(e => !e.past && isDrinkSp(e.x, r.p)) })).filter(r => r.sp.length);
+  let hhR = 15, hh = hhAll.filter(r => r.mi <= hhR);
+  if (!hh.length) hh = hhAll.filter(r => r.mi <= (hhR = 30));
+  const grp = r => (r.sp[0].live ? 0 : r.sp[0].soon || (!tonight && r.sp[0].s != null) ? 1 : 2);
+  hh.sort((a, b) => grp(a) - grp(b) || (grp(a) === 1 ? a.sp[0].s - b.sp[0].s : 0) || byMi(a, b));
+  // strip clubs with every special that day (buffets, drinks, free entry); none within 30 mi → the nearest few
+  const clubAll = pool.filter(r => isClub(r.p)).sort(byMi).map(r => ({ ...r, sp: spOf(r.p) }));
+  const clubs = clubAll.filter(r => r.mi <= 30);
+  // goth: a night / event that day first, then the other venues (sparse data, so a wide radius)
+  const goth = pool.filter(r => isGoth(r.p) && r.mi <= 60).map(r => ({ ...r, sp: spOf(r.p).filter(e => !e.past) })).sort((a, b) => (b.sp.length > 0) - (a.sp.length > 0) || byMi(a, b));
+  const ladies = pool.filter(r => r.p.sp?.length && r.mi <= 30).map(r => ({ ...r, sp: spOf(r.p).filter(e => !e.past && isLadiesSp(e.x)) })).filter(r => r.sp.length).sort(byMi);
+  // good bars: the Bar night ranking (dive bars, ratings, that day's specials) minus clubs; the best 8, nearest first
+  const top = (list, n) => [...list.slice(0, n).sort(byMi), ...list.slice(n).sort(byMi)].map(r => ({ p: r.p, mi: r.mi, approx: r.approx, sp: spOf(r.p).filter(e => !e.past) }));
+  let barR = 15, bars = rank('social', { from, at: eve, maxMi: barR }).filter(r => !isClub(r.p));
+  if (bars.length < 3) bars = rank('social', { from, at: eve, maxMi: (barR = 30) }).filter(r => !isClub(r.p));
+  const arcade = rank('arcade', { from, at: eve, maxMi: 30 });
+  return { date, tonight, dow, ts, hh: { rows: hh, r: hhR }, clubs: { rows: clubs, r: 30, nearest: clubs.length ? [] : clubAll.slice(0, 3) },
+    goth: { rows: goth, r: 60 }, ladies: { rows: ladies, r: 30 }, bars: { rows: top(bars, 8), r: barR }, arcade: { rows: top(arcade, 3), r: 30 } };
 }
 const isKava = p => p.c === 'work' && /kava|tea/.test(p.sc || '') && p.x.kratom !== true;
 const isMeatSpecial = x => /steak|prime rib|\bribs?\b|sirloin|ribeye|brisket|bbq|barbecue|wings|meat/i.test((x.l || '') + ' ' + (x.items || []).join(' '));

@@ -249,3 +249,9 @@ html[data-theme="dark"] .chip.tony { background: #E9E6E0; color: #1D1D1F; }
 .spx-i { font-size: 13px; color: var(--muted); margin-top: 1px; }
 .spx-m { font-size: 12px; color: var(--faint); margin-top: 4px; }
 .spx.more { width: auto; display: grid; place-items: center; font-weight: 600; font-size: 14px; color: var(--accent); }
+
+/* Night out: section title with a count + "See all" */
+.sec { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 22px 0 10px; }
+.sec h2 { margin: 0; }
+.sec .cnt { color: var(--faint); font-weight: 600; }
+.sec .btn { flex: none; padding-right: 0; }
