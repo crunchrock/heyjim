@@ -1,5 +1,5 @@
 // Offline support. VERSION is rewritten by build/build.mjs on every build.
-const VERSION = '8415b4e03a';
+const VERSION = 'f742af32a1';
 const SHELL = ['./', 'index.html', 'styles.css', 'core.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open('shell-' + VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

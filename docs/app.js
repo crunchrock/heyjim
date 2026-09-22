@@ -380,8 +380,9 @@ function placeChips(p, type, ts, dur) {
   }
   if (p.sp?.length || p.bd) {
     const sp = specialsAt(p, ts || Date.now());
-    if (sp.now) out.push(chip('🍹 Now: ' + (sp.now.items || [sp.now.l]).slice(0, 2).join(', '), 'acc'));
-    else if (sp.today.length) out.push(chip('Tonight: ' + sp.today.map(x => (x.s ? fmtClock(+x.s.split(':')[0] * 60 + +x.s.split(':')[1]) + ' ' : '') + (x.items?.[0] || x.l)).join(' · '), 'acc'));
+    const what = x => x.items?.[0] || x.l || 'Special';
+    if (sp.now) out.push(chip('🍹 Now: ' + (sp.now.items?.length ? sp.now.items : [what(sp.now)]).slice(0, 2).join(', '), 'acc'));
+    else if (sp.today.length) out.push(chip('Tonight: ' + sp.today.map(x => (x.s ? fmtClock(+x.s.split(':')[0] * 60 + +x.s.split(':')[1]) + ' ' : '') + what(x)).join(' · '), 'acc'));
     else if (p.sp?.length) out.push(chip('Specials ' + [...new Set(p.sp.map(x => dayNames(x.d)))].join(', ')));
     if (p.bd?.k) out.push(chip(p.bd.k.replace(/_/g, ' ')));
   }

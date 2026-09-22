@@ -1083,7 +1083,7 @@ async function pullPings(force) {
 // one file per day in the data repo; conflicts union by time so nothing is lost
 async function actPush(force) {
   if (!D?.sync || !ACT.dirty || actPush.busy) return;
-  if (!force && Date.now() - ACT.pushT < 5 * MIN) return;
+  if (Date.now() - ACT.pushT < (force ? MIN : 5 * MIN)) return;   // at most one commit a minute, even on every app switch
   actPush.busy = true; ACT.pushT = Date.now();
   try {
     actTrim();

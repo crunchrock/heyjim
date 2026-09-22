@@ -67,6 +67,7 @@ for (const p of b.pois || []) {
   const dupe = exByNameCity.get(norm(p.name) + '|' + norm(p.city));
   if (dupe && dupe !== p.id) W(`${w}: looks like existing ${dupe} (same name + city). Use its id (upsert) or poi_patches instead of a new place.`);
   for (const x of p.specials || []) {
+    if (!x.label && !x.items?.length) E(`${w}: special needs a label or items ("description" isn't read)`);
     for (const d of x.days || []) if (!DAYS.includes(d)) E(`${w}: special day ${d}`);
     for (const t of [x.start, x.end]) if (t != null && !/^\d{1,2}:\d{2}$/.test(t)) E(`${w}: special time ${t}`);
   }

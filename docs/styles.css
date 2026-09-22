@@ -230,3 +230,5 @@ html[data-theme="dark"] .chip.guy { background: rgba(255,120,60,.16); color: #FF
 code { font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--card2); padding: 1px 5px; border-radius: 6px; word-break: break-all; }
 .chip.tony { background: #2B2B2E; color: #F2EFE9; gap: 5px; }
 html[data-theme="dark"] .chip.tony { background: #E9E6E0; color: #1D1D1F; }
+/* long chips (tonight's specials) wrap inside the card instead of running off it */
+.chip { max-width: 100%; white-space: normal; line-height: 1.3; }
