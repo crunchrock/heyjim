@@ -6,4 +6,4 @@ http.createServer((q, r) => {
   let p = decodeURIComponent(q.url.split('?')[0]); if (p === '/') p = '/index.html';
   const f = p.startsWith('/_') ? path.join(OUT, p.slice(1)) : path.join(DOCS, p);
   fs.readFile(f, (e, b) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'Content-Type': T[path.extname(f)] || 'application/octet-stream' }); r.end(b); });
-}).listen(8787);
+}).listen(+process.env.PORT || 8787);

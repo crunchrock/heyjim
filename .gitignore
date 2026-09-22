@@ -5,3 +5,5 @@ build/geocode_misses.json
 build/*.log
 node_modules/
 build/test/ui/out/
+.claude/
+build/.geocode.lock

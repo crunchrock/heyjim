@@ -37,14 +37,16 @@ const store = {
   del(k) { try { localStorage.removeItem('hj.' + k); } catch {} },
 };
 const DEFAULT_STATE = {
-  settings: { theme: 'auto', maps: 'gapp', club: true, tent: true, hotel: false, name: '' },
-  fav: {}, avoid: {}, obs: [], last: {}, nights: [], days: {}, log: [], wishes: [],
-  workout: 0, supplies: {}, zone: null, loc: null,
+  settings: { theme: 'auto', maps: 'gapp', club: true, tent: true, hotel: false, name: '', autotrack: true, alist: true },
+  fav: {}, avoid: {}, obs: [], last: {}, nights: [], days: {}, log: [], wishes: [], mine: [],
+  workout: 0, supplies: {}, zone: null, zoneT: 0, loc: null,
 };
 let S = Object.assign(structuredClone(DEFAULT_STATE), store.get('state', {}));
 S.settings = Object.assign({}, DEFAULT_STATE.settings, S.settings);
 let saveT;
+// save() = a real change (stamped + synced); saveQuiet() = local-only bookkeeping like GPS fixes (no sync, no stamp)
 function save() { S.updatedAt = Date.now(); clearTimeout(saveT); saveT = setTimeout(() => { store.set('state', S); syncSoon(); }, 120); }
+function saveQuiet() { clearTimeout(saveT); saveT = setTimeout(() => store.set('state', S), 400); }
 function saveNow() { clearTimeout(saveT); store.set('state', S); }
 
 // ---------- sync: user state <-> private GitHub repo (contents API). Local-first; the repo is the backup + source for rebuilds.
@@ -53,26 +55,37 @@ const SYNC_SKIP = ['loc'];   // don't commit GPS pings
 const u8b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
 const toB64 = str => u8b64(new TextEncoder().encode(str));
 const fromB64 = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\s/g, '')), c => c.charCodeAt(0)));
-function ghApi(method, body) {
+function ghApi(method, body, path) {
   const s = D?.sync;
-  return fetch(`https://api.github.com/repos/${s.repo}/contents/${s.path}`, {
+  return fetch(`https://api.github.com/repos/${s.repo}/contents/${path || s.path}`, {
     method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined,
     headers: { Authorization: `Bearer ${s.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
   });
 }
 function syncSoon(ms = 15000) { if (!D?.sync) return; sync.dirty = true; clearTimeout(sync.t); sync.t = setTimeout(syncPush, ms); }
-// append-only lists merge by id / time so two devices (or a stale phone) never lose notes, logs or nights
+// append-only lists merge by id / time so two devices (or a stale phone) never lose notes, logs or nights.
+// Removals are tombstones ({del: time}) so a merge can't resurrect them; for the same key the removed / most recently edited copy wins.
 function mergeState(remote) {
-  const byKey = (a, b, k) => { const m = new Map(); for (const x of [...(a || []), ...(b || [])]) m.set(k(x), x); return [...m.values()].sort((x, y) => (x.t || 0) - (y.t || 0)); };
+  const ver = x => Math.max(x.del || 0, x.u || 0, x.t || 0);
+  const byKey = (a, b, k) => {
+    const m = new Map();
+    for (const x of [...(a || []), ...(b || [])]) { if (!x) continue; const key = k(x), prev = m.get(key); if (!prev || (x.del && !prev.del) || (!prev.del && ver(x) > ver(prev))) m.set(key, x); }
+    return [...m.values()].sort((x, y) => (x.t || 0) - (y.t || 0));
+  };
   const newer = (remote.updatedAt || 0) > (S.updatedAt || 0) ? remote : S;
   const out = { ...structuredClone(DEFAULT_STATE), ...newer, loc: S.loc };
   out.obs = byKey(S.obs, remote.obs, x => x.id);
   out.log = byKey(S.log, remote.log, x => x.id);
   out.nights = byKey(S.nights, remote.nights, x => x.poi + '|' + (x.day || x.t));
   out.wishes = byKey(S.wishes, remote.wishes, x => x.area + x.t);
+  out.mine = byKey(S.mine, remote.mine, x => x.id);
+  // days: the newer state wins per date; a cleared day is a tombstone so the older copy can't come back
   out.days = { ...(newer === S ? remote.days : S.days), ...newer.days };
   return out;
 }
+const alive = arr => (arr || []).filter(x => !x.del);
+// remove tonight's (or any day's) logged night without letting a sync merge bring it back
+function dropNights(pred) { for (const n of S.nights) if (!n.del && pred(n)) n.del = Date.now(); }
 async function syncPull() {
   if (!D?.sync) return false;
   try {
@@ -81,7 +94,7 @@ async function syncPull() {
     const j = await r.json();
     sync.sha = j.sha;
     const remote = JSON.parse(fromB64(j.content || '') || '{}');
-    if (remote.updatedAt && remote.updatedAt !== S.updatedAt) { S = mergeState(remote); S.settings = Object.assign({}, DEFAULT_STATE.settings, S.settings); store.set('state', S); return true; }
+    if (remote.updatedAt && remote.updatedAt !== S.updatedAt) { S = mergeState(remote); S.settings = Object.assign({}, DEFAULT_STATE.settings, S.settings); sanitize(); mountMine(); store.set('state', S); return true; }
     sync.err = null;
   } catch (e) { sync.err = e.message; }
   return false;
@@ -131,19 +144,71 @@ async function decryptData(buf, key) {
 // ---------- data
 let D = null;
 const P = {}, Z = {};
+function indexPoi(p) {
+  P[p.id] = p;
+  p.caps ||= {}; p.am ||= []; p.tags ||= []; p.x ||= {};
+  p._z = Z[p.z];
+  p._ov = D.ovn[p.id]?.[0] || p._ov; p._camp = D.camp[p.id]?.[0]; p._mail = D.mail[p.id]?.[0];
+  p._rec = D.rec[p.id]?.[0]; p._food = D.food[p.id]?.[0];
+  p._txt = [p.n, p.city, p.a, p.sc, p.c, p.tags.join(' '), p.x.brand, p._z?.n].join(' ').toLowerCase();
+}
 function indexData(data) {
   D = data;
   for (const z of D.zones) Z[z.id] = z;
-  for (const p of D.pois) {
-    P[p.id] = p;
-    p.caps ||= {}; p.am ||= []; p.tags ||= []; p.x ||= {};
-    p._z = Z[p.z];
-    p._ov = D.ovn[p.id]?.[0]; p._camp = D.camp[p.id]?.[0]; p._mail = D.mail[p.id]?.[0];
-    p._rec = D.rec[p.id]?.[0]; p._food = D.food[p.id]?.[0];
-    p._txt = [p.n, p.city, p.a, p.sc, p.c, p.tags.join(' '), p._z?.n].join(' ').toLowerCase();
-  }
+  for (const p of D.pois) indexPoi(p);
+  // places merged away by a data rebuild still resolve (saved plans, notes, favorites)
+  for (const [a, b] of Object.entries(D.alias || {})) if (P[b] && !P[a]) P[a] = P[b];
   // DoorDash market hotspots point at restaurant POIs
   for (const [zid, ms] of Object.entries(D.dd || {})) for (const m of ms) { m.z = zid; for (const s of m.subs || []) if (s.poi && P[s.poi]) P[s.poi]._dd = m; }
+  mountMine();
+}
+
+// ---------- his own places (added in the app; synced in S.mine, folded into packs on rebuilds)
+// kind → how the planner treats it
+const MINE_KINDS = {
+  hotel: ['🏨', 'Hotel lot (night spot)', 'overnight_candidate', 'hotel', { sleep_candidate: 'r' }, 'hotel_cluster'],
+  walmart: ['🛒', 'Walmart lot (night spot)', 'overnight_candidate', 'walmart', { sleep_candidate: 'r', groceries: 'r' }, 'walmart'],
+  cracker: ['🪑', 'Cracker Barrel (night spot)', 'overnight_candidate', 'cracker_barrel', { sleep_candidate: 'r', meal: 'r' }, 'cracker_barrel'],
+  truck: ['🚛', 'Truck stop (night spot)', 'overnight_candidate', 'truck_stop', { sleep_candidate: 'r', fuel: 'r', restroom: 'r' }, 'truck_stop'],
+  lot: ['🅿️', 'Other lot (night spot)', 'overnight_candidate', 'public_lot', { sleep_candidate: 'r' }, 'public_lot'],
+  camp: ['⛺', 'Campground', 'camping', 'campground', { tent_camp: 'r', restroom: 'i' }],
+  cafe: ['☕', 'Café (work)', 'work', 'independent_cafe', { work_indoor: 'r', wifi: 'i' }],
+  kava: ['🍵', 'Kava / tea bar (work)', 'work', 'kava_bar', { work_indoor: 'r' }],
+  library: ['📚', 'Library', 'work', 'library', { work_indoor: 'r', wifi: 'r' }],
+  water: ['🌊', 'Water spot', 'waterfront', 'park', { work_outdoors: 'r', recreation: 'r' }],
+  food: ['🍜', 'Food', 'food', 'local_cheap', { meal: 'r' }],
+  pizza: ['🍕', 'Pizza', 'food', 'pizza', { meal: 'r' }],
+  bar: ['🍺', 'Bar', 'social', 'dive_bar', {}],
+  gym: ['🏋️', 'Gym / shower', 'gym', 'planet_fitness', { gym: 'r', shower: 'r' }],
+  run: ['🏃', 'Trail run', 'fun', 'trailhead', { trail_run: 'r', recreation: 'r' }],
+  fun: ['🌿', 'Fun / explore', 'fun', 'attraction', { recreation: 'r' }],
+  movie: ['🎬', 'Movie theater', 'fun', 'movie_theater', { recreation: 'r' }],
+  arcade: ['👾', 'Arcade / barcade', 'fun', 'arcade', { recreation: 'r' }],
+  groc: ['🥦', 'Groceries', 'food', 'grocery', { groceries: 'r' }],
+  gas: ['⛽', 'Gas', 'life_support', 'gas_station', { fuel: 'r' }],
+  laundry: ['🧺', 'Laundromat', 'life_support', 'laundromat', { laundry: 'r' }],
+  other: ['📍', 'Other', 'fun', 'other', { recreation: 'i' }],
+};
+function minePoi(m) {
+  const k = MINE_KINDS[m.kind] || MINE_KINDS.other, z = D.zones.length ? nearestZone(m) : null;
+  const p = { id: 'u_' + m.id, z: z?.id, n: m.n, c: k[2], sc: k[3], a: m.a || '', city: m.city || '', lat: m.lat, lng: m.lng, gq: 'exact',
+    caps: { ...k[4] }, am: [], tags: ['mine', ...({ pizza: ['pizza'], run: ['trail_run'], movie: ['movies'], arcade: ['arcade'] }[m.kind] || [])], tn: m.note || '', q: m.q || [m.n, m.a].filter(Boolean).join(', '),
+    x: {}, mine: 1 };
+  if (m.h) p.h = m.h;
+  if (k[5]) p._ov = { ty: k[5], st: 'uncertain', pr: 'inspect_first', notes: 'Added by you' + (m.note ? ': ' + m.note : '') };
+  if (m.kind === 'bar') p.tags.push('social');
+  return p;
+}
+function mountMine() {
+  if (!D) return;
+  for (const p of D.pois) if (p.mine) delete P[p.id];
+  D.pois = D.pois.filter(p => !p.mine);
+  for (const m of alive(S.mine)) { if (m.lat == null) continue; const p = minePoi(m); D.pois.push(p); indexPoi(p); }
+}
+function addMine(place, kind) {
+  const m = { id: uid(), t: Date.now(), kind, n: place.n.trim(), a: place.a || '', city: place.city || '', lat: +(+place.lat).toFixed(5), lng: +(+place.lng).toFixed(5), q: place.q, osm: place.osm, note: place.note || '' };
+  S.mine.push(m); mountMine(); save();
+  return P['u_' + m.id];
 }
 
 // ---------- geo
@@ -160,24 +225,63 @@ function bearing(a, b) {
 const ptOf = p => (p.lat != null ? { lat: p.lat, lng: p.lng } : p._z?.lat != null ? { lat: p._z.lat, lng: p._z.lng, approx: 1 } : null);
 const driveMin = mi => (mi < 0.2 ? 0 : round5(4 + (mi * 1.3) / (mi > 25 ? 58 : mi > 8 ? 42 : 27) * 60));
 const fmtMi = mi => (mi < 0.1 ? 'here' : mi < 10 ? mi.toFixed(1) + ' mi' : Math.round(mi) + ' mi');
-function nearestZone(pt) {
+// TV-only zones (South Florida: Guy's / Tony's picks) never count as an everyday planning area
+function nearestZone(pt, withTv) {
   let best = null, bd = 1e9;
-  for (const z of D.zones) { const d = hav(pt, z); if (d < bd) { bd = d; best = z; } }
+  for (const z of D.zones) { if (z.tv && !withTv) continue; const d = hav(pt, z); if (d < bd) { bd = d; best = z; } }
   return best;
 }
+// "Plan as if I'm in zone X" is a temporary override: it expires after 12h so the app never stays stuck in an old area
+const ZONE_TTL = 12 * HOUR;
+function zoneOverride() {
+  if (!S.zone) return null;
+  if (!Z[S.zone] || (S.zoneT && Date.now() - S.zoneT > ZONE_TTL)) { S.zone = null; S.zoneT = 0; return null; }
+  if (!S.zoneT) S.zoneT = Date.now();
+  return Z[S.zone];
+}
 function here() {
-  if (S.zone && Z[S.zone]) return { lat: Z[S.zone].lat, lng: Z[S.zone].lng, zone: S.zone };
+  const z = zoneOverride();
+  if (z) return { lat: z.lat, lng: z.lng, zone: z.id };
   if (S.loc) return S.loc;
   return { lat: 28.793, lng: -81.307, zone: 'sanford-lake-mary' };
+}
+// where he actually is right now: a GPS fix from the last 45 minutes (null if unknown / overridden by a zone)
+function liveLoc(maxAge = 45 * MIN) {
+  if (zoneOverride()) return null;
+  const l = S.loc;
+  return l && l.t && Date.now() - l.t < maxAge && (l.acc || 0) < 5000 ? l : null;
+}
+const locListeners = [];
+function setLoc(pos) {
+  const prev = S.loc;
+  S.loc = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5), t: Date.now(), acc: Math.round(pos.coords.accuracy || 0) };
+  saveQuiet();
+  trackPoint(S.loc);
+  for (const f of locListeners) try { f(S.loc, prev); } catch (e) { logError(e, 'loc listener'); }
+  return S.loc;
 }
 function locate(fresh) {
   return new Promise(res => {
     if (!navigator.geolocation) return res(null);
-    navigator.geolocation.getCurrentPosition(pos => {
-      S.loc = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: Date.now(), acc: Math.round(pos.coords.accuracy || 0) };
-      save(); res(S.loc);
-    }, () => res(null), { enableHighAccuracy: !!fresh, timeout: 12000, maximumAge: fresh ? 0 : 5 * MIN });
+    navigator.geolocation.getCurrentPosition(pos => res(setLoc(pos)), () => res(null), { enableHighAccuracy: !!fresh, timeout: 12000, maximumAge: fresh ? 0 : 2 * MIN });
   });
+}
+// while the app is on screen, keep the fix fresh (cheap: no high accuracy)
+let watchId = null;
+function watchLoc(on) {
+  if (!navigator.geolocation) return;
+  if (on && watchId == null) watchId = navigator.geolocation.watchPosition(setLoc, () => {}, { enableHighAccuracy: false, maximumAge: MIN, timeout: 30000 });
+  if (!on && watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+}
+// the known place he's standing at (within ~200 m), if any
+function nearbyPoi(pt = liveLoc(), maxMi = 0.13, pred) {
+  if (!pt || (pt.acc || 0) > 400) return null;
+  let best = null, bd = maxMi;
+  for (const p of D.pois) {
+    if (p.lat == null || p.gq === 'city' || S.avoid[p.id] || (pred && !pred(p))) continue;
+    const d = hav(pt, p); if (d < bd) { bd = d; best = p; }
+  }
+  return best;
 }
 
 // ---------- sun (SunCalc-derived)
@@ -319,7 +423,7 @@ function sketchChip(p) {
 }
 const LOT_TYPE = { walmart: 'Walmart lot', planet_fitness: 'PF lot', hotel_cluster: 'Hotel lot', cracker_barrel: 'Cracker Barrel', truck_stop: 'Truck stop', public_lot: 'Public lot', rest_area: 'Rest area (3h limit)', outdoor_retailer: 'Bass Pro / Cabela’s', casino: 'Casino' };
 const lotChip = p => (p._ov ? [LOT_TYPE[p._ov.ty] || 'Lot', ''] : p.caps.tent_camp ? ['Camping', 'ok'] : p.caps.paid_lodging ? ['Paid room', ''] : null);
-function lastNight(id) { let t = 0; for (const n of S.nights) if (n.poi === id && n.t > t) t = n.t; return t; }
+function lastNight(id) { let t = 0; for (const n of S.nights) if (!n.del && n.poi === id && n.t > t) t = n.t; return t; }
 function wfChips(p) {
   const w = p.wf; if (!w) return [];
   const obs = obsFor(p.id).flatMap(o => o.tags);
@@ -363,7 +467,26 @@ function valueScore(p) {
   if (f.pl != null) s += { 1: 4, 2: 1, 3: -5, 4: -8 }[f.pl] || 0;
   if (f.cheap) s += 3;
   if (f.asian) s += 2;
-  if (p.sc === 'fast_food') s -= 1;
+  if (p.sc === 'fast_food' && !p.tags.includes('crave')) s -= 1;
+  if (isGuy(p) || isTony(p)) s += 2;
+  if (p.tags.includes('local_gem')) s += 1;
+  return s;
+}
+const isGuy = p => p.tags.includes('ddd');
+const isTony = p => p.tags.includes('bourdain');
+const isGoth = p => p.tags.includes('goth') || p.sc === 'goth_club';
+const isMovie = p => p.tags.includes('movies') || /movie_theater|drive_in|cinema/.test(p.sc || '');
+const isArcade = p => (p.tags.includes('arcade') || /arcade/.test(p.sc || '')) && !/dave (&|and) buster|main event|round ?1/i.test(p.n);
+const isPizza = p => p.c === 'food' && (p.sc === 'pizza' || p.tags.includes('pizza') || /pizza/i.test(p.fv?.cu || ''));
+const isRun = p => !!p.caps.trail_run || p.tags.includes('trail_run');
+const isWonder = p => p.tags.includes('wonder');
+function runBonus(p) {
+  const t = p.x.trail || {};
+  let s = 0;
+  if (t.r != null) s += t.r >= 4.7 ? 3 : t.r >= 4.4 ? 2 : t.r < 4 ? -2 : 0;
+  if (/rugged/i.test(t.terrain || '')) s += 3; else if (/rolling/i.test(t.terrain || '')) s += 1;
+  if (/single|dirt|root/i.test(t.surface || '')) s += 1;
+  if (/paved|asphalt|sidewalk/i.test(t.surface || '')) s -= 2;
   return s;
 }
 // bar specials on a given moment (in the bar's timezone): {today: [...], now: special|null}
@@ -376,9 +499,12 @@ function specialsAt(p, ts = Date.now()) {
   return { today, now };
 }
 const dayNames = ds => { const n = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; return ds?.length ? ds.map(d => n[d]).join('/') : 'Daily'; };
+const isClub = p => p.sc === 'strip_club' || p.tags.includes('strip_club') || p.bd?.k === 'strip_club';
 function barBonus(p, at) {
   const dow = new Date(at).getDay(), sp = specialsAt(p, at);
   let s = sp.now ? 8 : sp.today.length ? 4 : 0;
+  // a "Bar night" block auto-picks dive bars; clubs are there to browse (Clubs list), not the default pick
+  if (isClub(p)) s -= 8;
   const k = p.bd?.k || p.sc || '';
   if (/dive|barcade|hipster/.test(k)) s += dow === 5 || dow === 6 ? 4 : 2;
   if (p.bd?.r >= 4.5) s += 2;
@@ -453,6 +579,11 @@ const BT = {
   carmeal: { n: 'Car meal', ic: '🥫', dur: 30, hint: 'Car staples: tuna, PB&J, whey, fruit. Cheap and fast.' },
   storage: { n: 'Storage unit run', ic: '📦', dur: 45, m: p => !!p.caps.storage, b: () => 0, caps: ['storage'], hint: 'Your Public Storage unit in Sanford. Later blocks re-plan around Sanford.' },
   free: { n: 'Free time', ic: '✨', dur: 60, hint: 'Unplanned. Wander, rest, whatever.' },
+  run: { n: 'Trail run', ic: '🏃', dur: 75, log: 'run', m: isRun, b: runBonus, caps: ['trail_run'], hint: 'Wild, rugged and scenic first. Water, phone, bug spray; finish before the gate closes. Shower after (PF).' },
+  wonder: { n: 'Natural wonder', ic: '🏞️', dur: 120, m: isWonder, b: p => (p.x.wonder?.swim ? 1 : 0), caps: ['recreation'], hint: 'The best springs, sinkholes and waterfalls. Popular springs close when the lot fills: go early, especially weekends.' },
+  movie: { n: 'Movie', ic: '🎬', dur: 150, log: 'movie', m: isMovie, b: p => (/^amc/i.test(p.x.brand || p.n) && S.settings.alist ? 4 : /epic/i.test(p.x.brand || '') ? 2 : 0) + (p.sc === 'drive_in' ? 2 : 0), caps: ['recreation'], hint: 'Check showtimes before you drive. A-List: reserve in the AMC app (free with your plan).' },
+  arcade: { n: 'Arcade', ic: '👾', dur: 90, m: isArcade, b: p => valueScore(p) + (p.bd?.r >= 4.5 ? 2 : 0), caps: [], hint: 'Pinball + retro cabinets. Barcades are usually 21+ at night.' },
+  pizza: { n: 'Pizza', ic: '🍕', dur: 50, m: p => isPizza(p) && !!(p.caps.meal || p.caps.protein_food), b: p => valueScore(p) + (p.tags.includes('dine_in') ? 1 : 0), caps: ['meal'], hint: 'Local gem dine-in pizza first.' },
 };
 function sleepBonus(p) {
   let s = 0; const o = p._ov;
@@ -468,7 +599,7 @@ function sleepBonus(p) {
 // rank candidate places for a block type near `from` at time `at`.
 // Distance dominates; closed places sink but stay visible (labeled with when they open); nothing past maxMi.
 // `anchor` keeps a day's blocks in its zone so plans don't drift town to town without a Travel block.
-const MAX_MI = { fun: 70, social: 60, sleep: 40, storage: 700 };
+const MAX_MI = { fun: 70, social: 60, sleep: 40, storage: 700, wonder: 80, run: 50, movie: 45, arcade: 50 };
 function rank(type, { from = here(), at = Date.now(), dur, avoid, anchor, maxMi, adj } = {}) {
   const def = BT[type];
   if (!def?.m) return [];
@@ -508,7 +639,8 @@ function nightOptions(from, at, anchor) {
   return rank('sleep', { from, at, dur: 0, anchor, maxMi: 25, adj: p => { const n = nightChip(p, at); return n?.[1] === 'ok' ? 3 : p.caps.gym && n?.[0] === 'Closed overnight' ? -4 : 0; } });
 }
 function pickRecon(b, from, at, anchor) {
-  const keep = (b.recon || []).filter(x => x.st !== 'todo');
+  // keep what he already checked nearby (good / bad); spots checked in another town drop off
+  const keep = (b.recon || []).filter(x => x.st !== 'todo' && P[x.poi] && (x.st === 'good' || hav(from, ptOf(P[x.poi])) < 25));
   const kinds = new Set(), out = [];
   for (const o of nightOptions(from, at, anchor)) {
     if (keep.some(x => x.poi === o.p.id) || obsScore(o.p.id) < -1) continue;
@@ -560,7 +692,9 @@ function mkBlock(spec) {
   if (at) { const [h, m] = at.split(':').map(Number); b.at = h * 60 + m; }
   return b;
 }
-const LOCAL_T = new Set(['gas', 'kava', 'cafe', 'panera', 'library', 'office', 'deep', 'light', 'water_s', 'water_work', 'water_l', 'meal', 'restroom', 'water', 'groc']);
+const LOCAL_T = new Set(['gas', 'kava', 'cafe', 'panera', 'library', 'office', 'deep', 'light', 'water_s', 'water_work', 'water_l', 'meal', 'pizza', 'restroom', 'water', 'groc']);
+// how far an auto-picked place may sit from the day's area before it's considered stale (he moved) and re-picked
+const staleMi = t => (t === 'storage' || t === 'travel' ? Infinity : LOCAL_T.has(t) ? 15 : t === 'wonder' || t === 'fun' ? 45 : 25);
 const WORK_T = new Set(['kava', 'cafe', 'panera', 'library', 'office', 'deep', 'light']);
 // work sessions are 2–4h; their duration stepper moves in 30m steps
 const WORK_BLOCKS = new Set(['agentic', 'kava', 'water_work', 'water_l', 'cafe', 'panera', 'library', 'office', 'deep', 'carofc', 'dash', 'car']);
@@ -575,13 +709,20 @@ function dayLabel(date) {
   const d = new Date(dateTs(date, 720));
   return WD[d.getDay()] + ' ' + d.getDate();
 }
-function getDay(date) { return S.days[date] || null; }
+// a cleared day is a tombstone ({del}) so sync can't resurrect it; treat it as no day
+function getDay(date) { const d = S.days[date]; return d && !d.del && Array.isArray(d.blocks) ? d : null; }
+// minutes since the planning day's midnight (after midnight counts as 24:xx of the day before, until 4am)
+const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes() + (n.getHours() < 4 ? 1440 : 0); };
+function ensureDay(date) {
+  let d = getDay(date);
+  if (!d) d = S.days[date] = { date, startMin: date === today() ? nowMin() : 480, blocks: [] };
+  return d;
+}
 function newDay(tplId, date = today()) {
   const tpl = TEMPLATES.find(t => t.id === tplId) || TEMPLATES[0];
   const blocks = tpl.b.map(mkBlock);
   const isToday = date === today();
-  const now = new Date();
-  const startMin = isToday ? now.getHours() * 60 + now.getMinutes() + (now.getHours() < 4 ? 1440 : 0) : 8 * 60;
+  const startMin = isToday ? nowMin() : 8 * 60;
   // trim to fit what's left of the day (keep gym, travel, sleep)
   const left = 26 * 60 - startMin;
   let trimmed = 0;
@@ -600,6 +741,39 @@ function newDay(tplId, date = today()) {
 function pruneDays() {
   const cut = addDays(today(), -21);
   for (const k of Object.keys(S.days)) if (k < cut) delete S.days[k];
+}
+// repair saved state so the UI can always render it: unknown block types, duplicate ids, several night spots in one day,
+// and blocks left running on a past day (closed at their planned length and logged as auto)
+function sanitize() {
+  const t = today();
+  S.mine ||= []; S.nights ||= []; S.obs ||= []; S.log ||= []; S.days ||= {};
+  for (const [k, day] of Object.entries(S.days)) {
+    if (!day || typeof day !== 'object') { delete S.days[k]; continue; }
+    if (day.del) continue;
+    day.date = k;
+    if (!Array.isArray(day.blocks)) day.blocks = [];
+    const ids = new Set();
+    day.blocks = day.blocks.filter(b => b && BT[b.t]);
+    for (const b of day.blocks) {
+      if (b.poi && D?.alias?.[b.poi]) b.poi = D.alias[b.poi];
+      for (const x of b.recon || []) if (D?.alias?.[x.poi]) x.poi = D.alias[x.poi];
+      if (!b.id || ids.has(b.id)) b.id = uid();
+      ids.add(b.id);
+      if (!(b.dur >= 0)) b.dur = BT[b.t].dur;
+      if (!['plan', 'active', 'done', 'skip'].includes(b.st)) b.st = 'plan';
+      if (b.st === 'active' && !b.s0) b.s0 = Date.now();
+    }
+    const sl = day.blocks.filter(b => b.t === 'sleep');
+    if (sl.length > 1) {
+      const keep = sl.find(b => b.confirmed) || sl.find(b => b.st === 'done') || sl[sl.length - 1];
+      for (const b of sl) if (b !== keep) for (const x of b.recon || []) if (!(keep.recon ||= []).some(y => y.poi === x.poi)) keep.recon.push(x);
+      day.blocks = day.blocks.filter(b => b.t !== 'sleep' || b === keep);
+    }
+    // the night spot always closes the day
+    const si = day.blocks.findIndex(b => b.t === 'sleep');
+    if (si >= 0 && si < day.blocks.length - 1) day.blocks.push(...day.blocks.splice(si, 1));
+    if (k < t) for (const b of day.blocks) if (b.st === 'active' && b.t !== 'sleep') completeBlock(b, Math.min(b.s0 + b.dur * MIN, dateTs(k, 28 * 60)), 'stale');
+  }
 }
 function zoneOfPoint(pt) { return pt.zone ? Z[pt.zone] : nearestZone(pt); }
 function nextZone(dir, from = here()) {
@@ -620,51 +794,75 @@ function blockPoint(b) {
 }
 // where a day begins: today = GPS / chosen zone; future days = the previous day's last stop (usually the sleep spot)
 function dayOrigin(day) {
-  if (day.date <= today()) return { pt: S.zone ? here() : (S.loc || here()), label: S.zone ? Z[S.zone].n : 'your location' };
+  if (day.date <= today()) {
+    const z = zoneOverride();
+    if (z) return { pt: here(), label: z.n + ' (chosen zone)' };
+    return { pt: here(), label: liveLoc() ? 'where you are' : S.loc ? `your last fix (${fmtAgo(S.loc.t)})` : 'the default area' };
+  }
   for (let i = 1; i <= 14; i++) {
     const prev = getDay(addDays(day.date, -i));
     if (!prev) continue;
     for (let j = prev.blocks.length - 1; j >= 0; j--) {
-      const b = prev.blocks[j], pt = b.st !== 'skip' && blockPoint(b);
-      if (pt) return { pt, label: b.poi ? P[b.poi].n : b.t === 'sleep' ? 'last night’s spot area' : Z[b.toZone]?.n || 'yesterday’s last stop', fromPrev: true };
+      const b = prev.blocks[j], pt = b.st !== 'skip' && BT[b.t] && blockPoint(b);
+      if (pt) return { pt, label: b.poi && P[b.poi] ? P[b.poi].n : b.t === 'sleep' ? 'last night’s spot area' : Z[b.toZone]?.n || 'yesterday’s last stop', fromPrev: true };
     }
   }
   return { pt: here(), label: 'current area' };
 }
 // Walk a day: compute times, drive legs, warnings, and optionally auto-pick places.
+// Today follows him: the first unfinished block starts from his live GPS position, and that position becomes the day's
+// area until a Travel / Storage block moves it. Auto-picked places that are now far from the area are stale and get
+// re-picked (pinned picks stay, with a warning + "Pick one near me"). Night-spot recon targets left in another town
+// are re-picked too. rows.moved = how many blocks were re-picked because he moved.
 function flow(day, assign) {
   if (!day) return [];
   const now = Date.now(), isToday = day.date === today(), clamp = day.date <= today();
-  let t = dateTs(day.date, day.startMin ?? 480), from = dayOrigin(day).pt, anchor = from, prevPoi = null, prevType = null;
+  const liveAt = isToday ? liveLoc() : null;
+  let t = dateTs(day.date, day.startMin ?? 480), from = dayOrigin(day).pt, anchor = from, atLive = false, moved = 0;
   const usedIndoor = new Set(), usedKinds = new Set(), usedPois = new Set();
   let prevKind = null;
   const rows = [];
   for (const b of day.blocks) {
-    const r = { b, warn: [] };
-    if (b.st === 'skip') { r.skip = true; rows.push(r); continue; }
+    const def = BT[b.t], r = { b, warn: [], acts: [] };
+    if (!def || b.st === 'skip') { r.skip = true; rows.push(r); continue; }
+    if (liveAt && !atLive && b.st !== 'done') { atLive = true; from = anchor = liveAt; }
     if (b.t === 'travel') {
       const to = blockPoint(b);
       r.miles = to ? hav(from, to) : 0;
       if (!b.durSet) b.dur = to ? round5(r.miles * 1.3 / 55 * 60 + 10) : 60;
       if (to && r.miles < 3) r.warn.push('Already in this zone');
     }
+    // picks start from the previous stop, unless that stop is far outside the day's area (e.g. a pinned place in the old town)
+    const pickFrom = hav(from, anchor) > 20 ? anchor : from;
     if (b.t === 'sleep') {
-      if (assign && b.st === 'plan' && !b.confirmed && (assign === 'all' || !b.recon?.length)) b.recon = pickRecon(b, from, Math.max(t, clamp ? now : 0), anchor);
-    } else if (assign && b.st === 'plan' && BT[b.t].m && (assign === 'all' ? !b.pinned : !b.poi)) {
-      const at = Math.max(t, clamp ? now : 0) + 10 * MIN;
-      const avoid = WORK_T.has(b.t) ? usedIndoor : null; // no marathons: each indoor work venue once a day
-      // mix spots across the day: a dev session goes somewhere new, ideally a different kind of place than the last block
-      const adj = /^water/.test(b.t) ? p => (usedPois.has(p.id) ? -8 : 0) : b.t === 'deep' ? p => (usedPois.has(p.id) ? -14 : 0) + (devKind(p)[0] === prevKind ? -10 : usedKinds.has(devKind(p)[0]) ? -4 : 0) : null;
-      const best = rank(b.t, { from, at, dur: b.dur, anchor, avoid, adj })[0];
-      // everyday blocks stay local; if the only match is far away, leave it open and say where the nearest is
-      const tooFar = best && LOCAL_T.has(b.t) && hav(anchor, ptOf(best.p)) > 15;
-      b.poi = best && !tooFar ? best.p.id : null;
-      b.far = tooFar ? best.p.id : null;
+      if (assign && b.st === 'plan' && !b.confirmed) {
+        const known = (b.recon || []).filter(x => P[x.poi]), todo = known.filter(x => x.st === 'todo');
+        const stale = todo.length && todo.every(x => hav(pickFrom, ptOf(P[x.poi])) > 20) && !known.some(x => x.st === 'good');
+        if (assign === 'all' || !known.length || stale) { b.recon = pickRecon(b, pickFrom, Math.max(t, clamp ? now : 0), anchor); if (stale) moved++; }
+      }
+    } else if (assign && b.st === 'plan' && def.m) {
+      const cur = b.poi && P[b.poi], cpt = cur && ptOf(cur);
+      const stale = cur && !b.pinned && cpt && hav(anchor, cpt) > staleMi(b.t);
+      if (assign === 'all' ? !b.pinned || !cur : !cur || stale) {
+        const at = Math.max(t, clamp ? now : 0) + 10 * MIN;
+        const avoid = WORK_T.has(b.t) ? usedIndoor : null; // no marathons: each indoor work venue once a day
+        // mix spots across the day: a dev session goes somewhere new, ideally a different kind of place than the last block
+        const adj = /^water/.test(b.t) ? p => (usedPois.has(p.id) ? -8 : 0) : b.t === 'deep' ? p => (usedPois.has(p.id) ? -14 : 0) + (devKind(p)[0] === prevKind ? -10 : usedKinds.has(devKind(p)[0]) ? -4 : 0) : null;
+        const best = rank(b.t, { from: pickFrom, at, dur: b.dur, anchor, avoid, adj })[0];
+        // everyday blocks stay local; if the only match is far away, leave it open and say where the nearest is
+        const tooFar = best && LOCAL_T.has(b.t) && hav(anchor, ptOf(best.p)) > 15;
+        const was = b.poi;
+        b.poi = best && !tooFar ? best.p.id : null;
+        b.far = tooFar ? best.p.id : null;
+        if (!cur) b.pinned = false;
+        if (stale && b.poi !== was) moved++;
+      }
     }
-    const dest = BT[b.t].night ? (nextSleep(day, b) ? blockPoint(nextSleep(day, b)) : null) : blockPoint(b);
+    const ns = def.night ? nextSleep(day, b) : null;
+    const dest = def.night ? (ns ? blockPoint(ns) : null) : blockPoint(b);
     if (b.t !== 'travel') { r.miles = dest ? hav(from, dest) : 0; r.travel = driveMin(r.miles); } else r.travel = 0;
-    if (b.st === 'done') { r.s = b.s0; r.e = b.s1; }
-    else if (b.st === 'active') { r.s = b.s0; r.e = Math.max(b.s0 + b.dur * MIN, now); r.over = now > b.s0 + b.dur * MIN; }
+    if (b.st === 'done') { r.s = b.s0 ?? t; r.e = b.s1 ?? r.s + b.dur * MIN; }
+    else if (b.st === 'active') { r.s = b.s0 ?? now; r.e = Math.max(r.s + b.dur * MIN, now); r.over = now > r.s + b.dur * MIN; }
     else {
       const ready = Math.max(t + r.travel * MIN, clamp ? now : 0);
       r.s = b.at != null ? Math.max(ready, dateTs(day.date, b.at)) : ready;
@@ -672,19 +870,31 @@ function flow(day, assign) {
       r.e = r.s + b.dur * MIN;
     }
     if (b.st !== 'done') blockWarnings(b, r);
-    if (b.st === 'plan' && dest && b.t !== 'travel' && b.t !== 'storage' && hav(anchor, dest) > 15) r.warn.push(`Nearest ${lc(BT[b.t].n)} in the data is ${Math.round(hav(anchor, dest))} mi out`);
+    if (b.st === 'plan' && dest && b.t !== 'travel' && b.t !== 'storage' && !def.night) {
+      const away = hav(anchor, dest);
+      if (b.t === 'sleep' && b.confirmed) { if (away > 30) { r.warn.push(`Tonight’s spot is ${Math.round(away)} mi from ${atLive ? 'you' : 'the day’s area'}`); r.acts.push(['nightNear', 'Find spots near me']); } }
+      else if (b.pinned && b.poi && away > staleMi(b.t)) { r.warn.push(`${Math.round(away)} mi from ${atLive ? 'where you are' : 'the day’s area'}`); r.acts.push(['repick', 'Pick one near me']); }
+      else if (away > 15) r.warn.push(`Nearest ${lc(def.n)} in the data is ${Math.round(away)} mi out`);
+    }
     t = r.e;
     if (dest) from = dest;
     if ((b.t === 'travel' || b.t === 'storage') && dest) anchor = dest;
-    if (b.poi) prevPoi = b.poi;
     if (b.poi && WORK_T.has(b.t)) usedIndoor.add(b.poi);
     const k = blockKind(b); if (k) usedKinds.add(k);
     prevKind = k; if (b.poi) usedPois.add(b.poi);
-    prevType = b.t;
     rows.push(r);
   }
+  rows.moved = moved;
   if (isToday) day._rows = rows;
   return rows;
+}
+// he moved: re-pick today's stale places around where he is. Future days are NOT touched: they're built logically from
+// the plan itself (the previous day's last stop, Travel blocks), and only re-pick when he edits them.
+function reanchor() {
+  const d = getDay(today());
+  const n = d ? flow(d, 'missing').moved || 0 : 0;
+  if (n) save();
+  return n;
 }
 function blockWarnings(b, r) {
   const p = b.poi && P[b.poi];
@@ -695,8 +905,8 @@ function blockWarnings(b, r) {
     else if (r.fit.k === 'short') r.warn.push((sunsetGate ? 'Gate closes around sunset: ' : '') + r.fit.txt + ` of ${fmtDur(b.dur)}`);
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) r.warn.push('Listed as temporarily closed');
     if (b.t === 'sleep') { const ln = lastNight(p.id); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + fmtAgo(ln) + '. Rotate?'); }
-  } else if (b.t === 'sleep') { if (!b.recon?.length) r.warn.push('No night spot options yet'); }
-  else if (BT[b.t].m && b.t !== 'travel') r.warn.push(b.far && P[b.far] ? `No ${lc(BT[b.t].n)} within 15 mi (nearest: ${P[b.far].n}, ${P[b.far].city || ''})` : `No ${lc(BT[b.t].n)} in the data near here`);
+  } else if (b.t === 'sleep') { if (!(b.recon || []).some(x => P[x.poi])) { r.warn.push('No night spot options yet'); r.acts.push(['addPlaceFor', 'Add a spot you know']); } }
+  else if (BT[b.t].m && b.t !== 'travel') { r.warn.push(b.far && P[b.far] ? `No ${lc(BT[b.t].n)} within 15 mi (nearest: ${P[b.far].n}, ${P[b.far].city || ''})` : `No ${lc(BT[b.t].n)} in the data near here`); r.acts.push(['addPlaceFor', 'Add a place']); }
   if (b.t === 'social') {
     const dow = new Date(r.s).getDay();
     if (dow === 0) r.warn.push('Sunday night: skip the bars and rest?');
@@ -714,10 +924,23 @@ function autofill(day, all) { flow(day, all ? 'all' : 'missing'); save(); }
 // swap a block's place for the best candidate that actually fits its time slot
 function fixBlock(day, b) {
   const rows = flow(day), r = rows.find(x => x.b === b);
-  const prevPt = (() => { let pt = dayOrigin(day).pt; for (const x of rows) { if (x.b === b) break; const q = blockPoint(x.b); if (q) pt = q; } return pt; })();
-  const alt = rank(b.t, { from: prevPt, at: r.s, dur: b.dur }).find(c => c.f.k === 'ok' && c.p.id !== b.poi);
+  if (!r) return null;
+  const alt = rank(b.t, { from: startPoint(day, b, rows), at: r.s, dur: b.dur }).find(c => c.f.k === 'ok' && c.p.id !== b.poi);
   if (alt) { b.poi = alt.p.id; b.pinned = false; save(); }
   return alt;
+}
+// where he'll be coming from when this block starts (today: live GPS for the first unfinished block)
+function startPoint(day, b, rows = flow(day)) {
+  const liveAt = day.date === today() ? liveLoc() : null;
+  const first = rows.findIndex(y => !y.skip && y.b.st !== 'done');
+  let pt = dayOrigin(day).pt;
+  for (let i = 0; i < rows.length; i++) {
+    const x = rows[i];
+    if (liveAt && i === first) pt = liveAt;
+    if (x.b === b) break;
+    const q = !x.skip && !BT[x.b.t]?.night && blockPoint(x.b); if (q) pt = q;
+  }
+  return pt;
 }
 
 // ---------- coverage + data packs
@@ -757,10 +980,29 @@ function weekStart(ts = Date.now()) {
   const d = new Date(ts - 4 * HOUR); d.setHours(4, 0, 0, 0);
   const dow = (d.getDay() + 6) % 7; return d.getTime() - dow * DAY;
 }
+// mark a block done and log what it counts for (dev / water / car / run time, gym + shower, needs). Returns a toast message.
+const LOG_LBL = { dev: 'game dev', water: 'on the water', car: 'car work', run: 'trail run', movie: 'at the movies' };
+function completeBlock(b, end = Date.now(), auto) {
+  const def = BT[b.t] || {};
+  if (b.st !== 'active' || !b.s0) b.s0 = end - b.dur * MIN;
+  b.s1 = Math.max(end, b.s0 + MIN); b.st = 'done';
+  if (auto) b.auto = auto; else delete b.auto;
+  const min = (b.s1 - b.s0) / MIN, ks = [].concat(def.log || []), extra = { t: b.s1, blk: b.id, ...(auto ? { auto: 1 } : {}), ...(b.poi && P[b.poi] ? { z: P[b.poi].z, poi: b.poi } : {}) };
+  let msg = (def.n || 'Block') + ' done';
+  const timed = ks.filter(x => LOG_LBL[x]);
+  if (timed.length) { timed.forEach(x => logEntry(x, min, extra)); msg = `Logged ${fmtDur(min)} ${timed.map(x => LOG_LBL[x]).join(' + ')}`; }
+  if (ks[0] === 'gym') { logEntry('gym', min, extra); S.last.shower = b.s1; msg = `${WORKOUTS[S.workout % 5].n} logged. Shower ✓`; S.workout = (S.workout + 1) % 5; }
+  if (['shower', 'laundry', 'water_refill', 'groceries', 'mail'].includes(ks[0])) S.last[ks[0]] = b.s1;
+  if (ks[0] === 'groceries') S.supplies = {};
+  if (b.t === 'sleep' && b.poi && !b.confirmed) { S.nights.push({ poi: b.poi, t: b.s1 }); msg = 'Night logged. Rotation updated.'; }
+  return msg;
+}
 function weekStats(ws = weekStart()) {
-  const we = ws + 7 * DAY, s = { dev: 0, dash: 0, gym: 0, car: 0, water: 0, waterDays: new Set(), gross: 0, miles: 0, gas: 0, dashActive: 0 };
+  const we = ws + 7 * DAY, s = { dev: 0, dash: 0, gym: 0, car: 0, run: 0, movies: 0, water: 0, waterDays: new Set(), gross: 0, miles: 0, gas: 0, dashActive: 0 };
   for (const e of S.log) {
-    if (e.t < ws || e.t >= we) continue;
+    if (e.del || e.t < ws || e.t >= we) continue;
+    if (e.k === 'run') s.run++;
+    if (e.k === 'movie') s.movies++;
     if (e.k === 'dev') s.dev += e.min;
     if (e.k === 'dash') { s.dash += e.min; s.gross += e.gross || 0; s.miles += e.miles || 0; s.gas += e.gas || 0; s.dashActive += e.active || 0; }
     if (e.k === 'gym') s.gym++;
@@ -768,6 +1010,279 @@ function weekStats(ws = weekStart()) {
     if (e.k === 'water') { s.water += e.min; if (e.min >= 40) s.waterDays.add(dayKey(e.t)); }
   }
   return s;
+}
+
+// ---------- activity: GPS breadcrumbs (while the app is open), iPhone Shortcut pings (car on/off), usage events and errors.
+// Kept 14 days on the phone; uploaded one file per day to heyjim-data/activity/<date>.json so his usage can be analyzed.
+const ACT = Object.assign({ pts: [], ev: [], pings: [], up: {}, seen: {}, pingT: 0, pushT: 0 }, store.get('act', {}));
+let actT;
+function actSave() { clearTimeout(actT); actT = setTimeout(() => store.set('act', ACT), 500); }
+function actTrim() {
+  const cut = Date.now() - 14 * DAY;
+  for (const k of ['pts', 'ev', 'pings']) { ACT[k] = ACT[k].filter(x => (x.t2 || x.t) > cut); if (ACT[k].length > 5000) ACT[k] = ACT[k].slice(-5000); }
+  for (const k of Object.keys(ACT.seen)) if (ACT.seen[k].t < cut) delete ACT.seen[k];
+}
+function trackEvent(e, data) {
+  ACT.ev.push(Object.assign({ t: Date.now(), e }, data));
+  if (ACT.ev.length > 6000) actTrim();
+  ACT.dirty = 1; actSave();
+}
+function logError(err, ctx) {
+  const m = String(err?.message || err), s = String(err?.stack || '').split('\n').slice(0, 4).join(' | ');
+  try { trackEvent('err', { m: m.slice(0, 300), s: s.slice(0, 600), c: ctx }); } catch {}
+}
+// stationary points extend the last crumb (t → t2), so a crumb is a stay: [t, t2] at lat/lng
+function trackPoint(l) {
+  if (!S.settings.autotrack || !l) return;
+  const now = Date.now(), last = ACT.pts[ACT.pts.length - 1];
+  // same spot again: extend the stay (overnight gaps too: seen at 11pm and 7am in the same lot = slept there)
+  const gap = now - (last?.t2 || last?.t || 0);
+  if (last && hav(last, l) < 0.07 && (gap < 3 * HOUR || (gap < 11 * HOUR && spansNight(last.t2 || last.t, now)))) { last.t2 = now; if (l.acc < (last.acc || 1e9)) Object.assign(last, { lat: l.lat, lng: l.lng, acc: l.acc }); }
+  else if (!last || now - (last.t2 || last.t) > 45000) ACT.pts.push({ t: now, t2: now, lat: l.lat, lng: l.lng, acc: l.acc });   // driving: ~1 crumb a minute
+  else return;
+  ACT.dirty = 1; actSave();
+}
+const monthKey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+// Shortcut ping file names: pings/<yyyy-MM>/<yyyyMMdd-HHmmss±zzzz>_<on|off>_<lat>_<lng>.txt  (the name is the data)
+function parsePing(name) {
+  const m = name.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})([+-]\d{2}:?\d{2}|Z)?_([a-z]+)_(-?\d+(?:[.,]\d+)?)_(-?\d+(?:[.,]\d+)?)/i);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s, tz, ev, la, ln] = m;
+  let t;
+  if (tz && tz !== 'Z') { const sg = tz[0] === '-' ? -1 : 1, hh = +tz.slice(1, 3), mm = +tz.slice(-2); t = Date.UTC(+y, mo - 1, +d, +h, +mi, +s) - sg * (hh * 60 + mm) * MIN; }
+  else t = tz === 'Z' ? Date.UTC(+y, mo - 1, +d, +h, +mi, +s) : new Date(+y, mo - 1, +d, +h, +mi, +s).getTime();
+  const lat = parseFloat(la.replace(',', '.')), lng = parseFloat(ln.replace(',', '.'));
+  if (!isFinite(t) || !isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90) return null;
+  const out = { t, ev: ev.toLowerCase(), lat, lng, name };
+  // Apple Pay pings carry _<amount>_<merchant> after the coordinates
+  const rest = name.slice(m[0].length).replace(/\.txt$/i, '');
+  if (out.ev === 'pay' && rest.startsWith('_')) {
+    const [amt, ...mer] = rest.slice(1).split('_');
+    const v = parseFloat(String(amt).replace(/[^\d.]/g, ''));
+    if (isFinite(v)) out.amt = +v.toFixed(2);
+    out.mer = mer.join(' ').replace(/[-+]+/g, ' ').trim().slice(0, 60);
+  }
+  return out;
+}
+async function pullPings(force) {
+  if (!D?.sync || (!force && Date.now() - ACT.pingT < 2 * MIN)) return 0;
+  ACT.pingT = Date.now();
+  let added = 0;
+  const have = new Set(ACT.pings.map(p => p.name));
+  for (const mk of new Set([monthKey(Date.now()), monthKey(Date.now() - 3 * DAY)])) {
+    try {
+      const r = await ghApi('GET', null, `pings/${mk}`);
+      if (r.status === 404) continue;
+      if (!r.ok) throw new Error('pings ' + r.status);
+      for (const f of await r.json()) { if (have.has(f.name)) continue; const p = parsePing(f.name); if (p) { ACT.pings.push(p); have.add(f.name); added++; } }
+    } catch (e) { logError(e, 'pullPings'); }
+  }
+  if (added) { ACT.pings.sort((a, b) => a.t - b.t); ACT.pingsLast = Date.now(); actSave(); }
+  return added;
+}
+// one file per day in the data repo; conflicts union by time so nothing is lost
+async function actPush(force) {
+  if (!D?.sync || !ACT.dirty || actPush.busy) return;
+  if (!force && Date.now() - ACT.pushT < 5 * MIN) return;
+  actPush.busy = true; ACT.pushT = Date.now();
+  try {
+    actTrim();
+    const since = ACT.pushedT || 0, days = new Set();
+    for (const k of ['ev', 'pts', 'pings']) for (const x of ACT[k]) if ((x.t2 || x.t) >= since) days.add(dayKey(x.t));
+    const stamp = Date.now();
+    for (const d of [...days].sort()) {
+      const pick = k => ACT[k].filter(x => dayKey(x.t) === d);
+      let body = { date: d, v: 1, ev: pick('ev'), pts: pick('pts'), pings: pick('pings').map(({ name, ...p }) => p), visits: Object.values(ACT.seen).filter(v => dayKey(v.s || v.t) === d) };
+      const put = () => ghApi('PUT', { message: `activity ${d}`, content: toB64(JSON.stringify(body) + '\n'), sha: ACT.up[d] || undefined }, `activity/${d}.json`);
+      let r = await put();
+      if (r.status === 409 || r.status === 422 || (r.status === 404 && ACT.up[d])) {
+        const g = await ghApi('GET', null, `activity/${d}.json`);
+        if (g.ok) {
+          const j = await g.json(); ACT.up[d] = j.sha;
+          try { const old = JSON.parse(fromB64(j.content || '')); const u = (a, b, k) => [...new Map([...(a || []), ...(b || [])].map(x => [k(x), x])).values()].sort((x, y) => x.t - y.t);
+            body = { ...body, ev: u(old.ev, body.ev, x => x.t + x.e), pts: u(old.pts, body.pts, x => x.t), pings: u(old.pings, body.pings, x => x.t + x.ev) }; } catch {}
+        } else delete ACT.up[d];
+        r = await put();
+      }
+      if (!r.ok) throw new Error('activity ' + r.status);
+      ACT.up[d] = (await r.json()).content.sha;
+    }
+    ACT.pushedT = stamp; ACT.dirty = 0; actSave();
+  } catch (e) { ACT.err = e.message; }
+  finally { actPush.busy = false; }
+}
+
+// ---------- auto-tracking: turn stays (breadcrumbs + car off/on pings) into what he did
+// stays: [{s, e, lat, lng, src}] — a crumb that lasted, or the time between parking (off) and driving again (on)
+function stays(since = Date.now() - 3 * DAY) {
+  const out = [];
+  for (const p of ACT.pts) if ((p.t2 || p.t) > since && (p.t2 || p.t) - p.t >= 15 * MIN) out.push({ s: p.t, e: p.t2, lat: p.lat, lng: p.lng, src: 'gps' });
+  const pg = ACT.pings.filter(p => p.t > since - DAY);
+  for (let i = 0; i < pg.length; i++) {
+    if (pg[i].ev !== 'off') continue;
+    const on = pg.slice(i + 1).find(p => p.ev === 'on');
+    if (on && on.t - pg[i].t >= 10 * MIN && on.t - pg[i].t < 20 * HOUR) out.push({ s: pg[i].t, e: on.t, lat: pg[i].lat, lng: pg[i].lng, src: 'car' });
+  }
+  // the same stay seen by both sources: keep the car one (exact times), extended by any GPS overlap
+  out.sort((a, b) => a.s - b.s);
+  const merged = [];
+  for (const x of out) {
+    const m = merged.find(y => hav(y, x) < 0.15 && x.s < y.e + 20 * MIN && x.e > y.s - 20 * MIN);
+    if (m) { if (x.src === 'car' && m.src !== 'car') Object.assign(m, { lat: x.lat, lng: x.lng, src: 'car' }); m.s = Math.min(m.s, x.s); m.e = Math.max(m.e, x.e); }
+    else merged.push({ ...x });
+  }
+  return merged;
+}
+// what a stay at a place most likely was
+function classifyStay(st) {
+  const min = (st.e - st.s) / MIN, p = nearbyPoi(st, 0.1), night = spansNight(st.s, st.e);
+  if (night && min >= 180) return { k: 'night', p, min };
+  if (!p) return null;
+  // a long stay at a PF lot is car-office work, not a 4h workout
+  if (p.caps.gym && min >= 30 && min <= 150) return { k: 'gym', p, min, t: 'gym' };
+  if (isRun(p) && min >= 25 && min <= 180) return { k: 'run', p, min, t: 'run' };
+  if ((isCafe(p) || isPanera(p) || isLibrary(p) || isKava(p) || isBookCafe(p)) && min >= 40) return { k: 'dev', p, min, t: isPanera(p) ? 'panera' : isLibrary(p) ? 'library' : isKava(p) ? 'kava' : 'cafe' };
+  if (isWater(p) && min >= 30) return { k: 'water', p, min, t: min >= 90 ? 'water_work' : 'water_s' };
+  if (hasCap('laundry')(p) && min >= 40) return { k: 'laundry', p, min, t: 'laundry' };
+  // restaurant waits during a DoorDash shift aren't meals
+  if (isRestaurant(p) && min >= 20 && min <= 120 && !dashing(st.s)) return { k: 'meal', p, min, t: 'meal' };
+  return null;
+}
+const dashing = ts => (getDay(dayKey(ts))?.blocks || []).some(b => b.t === 'dash' && (b.st === 'active' || (b.st === 'done' && b.s0 <= ts && ts <= (b.s1 || 0))));
+// Apple Pay purchases (from the Transaction automation): what, where, which kind of spending
+const SPEND_KINDS = [['Gas', /murphy|shell|chevron|exxon|mobil|\bbp\b|sunoco|circle k|racetrac|wawa|speedway|marathon|citgo|valero|pilot|flying j|love'?s|buc-?ee/i, p => isGas(p)],
+  ['Groceries', /publix|aldi|trader joe|sprouts|whole foods|walmart|winn|target|kroger|food lion/i, p => !!p.caps.groceries],
+  ['Food', /pizza|grill|cafe|coffee|restaurant|kitchen|diner|bbq|taco|sushi|pho|burger|chicken|panera|starbucks|dunkin|mcdonald|wendy|chick|subway|kava/i, p => p.c === 'food' || p.c === 'work' || p.c === 'social'],
+  ['Gym', /planet fitness|fitness/i, p => !!p.caps.gym], ['Laundry', /laundr|wash/i, p => !!p.caps.laundry], ['Vape', /vape|smoke/i, p => !!p.caps.vape]];
+function purchases(since = weekStart()) {
+  return ACT.pings.filter(p => p.ev === 'pay' && p.t >= since).map(p => {
+    const poi = nearbyPoi(p, 0.1);
+    const kind = (SPEND_KINDS.find(([, rx, m]) => rx.test(p.mer || '') || (poi && m(poi))) || ['Other'])[0];
+    return { ...p, poi, kind };
+  });
+}
+const spansNight = (s, e) => { for (let t = s; t <= e; t += 30 * MIN) { const h = new Date(t).getHours(); if (h >= 1 && h < 6) return true; } return false; };
+// several quick stops at restaurants within a few hours = a DoorDash shift
+function dashRuns(sts) {
+  const quick = sts.filter(x => x.e - x.s <= 15 * MIN && nearbyPoi(x, 0.1, isRestaurant)).sort((a, b) => a.s - b.s);
+  const runs = [];
+  for (const x of quick) { const r = runs[runs.length - 1]; if (r && x.s - r.e < 60 * MIN) { r.e = x.e; r.n++; } else runs.push({ s: x.s, e: x.e, n: 1 }); }
+  return runs.filter(r => r.n >= 3);
+}
+// Apply finished stays to the timeline. Returns the list of things it logged (for a toast / the Today card).
+function autoTrack() {
+  if (!S.settings.autotrack || !D) return [];
+  const done = [], sts = stays(), now = Date.now(), liveAt = liveLoc(20 * MIN);
+  for (const st of sts) {
+    const key = 'st' + Math.round(st.s / MIN);
+    if (ACT.seen[key]) continue;
+    const ongoing = liveAt && hav(liveAt, st) < 0.1 && now - st.e < 20 * MIN;
+    if (ongoing) continue;                 // still there: handled by arrive/leave below
+    const c = classifyStay(st);
+    ACT.seen[key] = { t: now, s: st.s, e: st.e, k: c?.k || null, poi: c?.p?.id || null, src: st.src };
+    if (!c) continue;
+    const date = dayKey(st.s);
+    if (c.k === 'night') {
+      if (c.p && !S.nights.some(n => !n.del && n.day === date)) { S.nights.push({ poi: c.p.id, t: st.e, day: date, auto: 1 }); done.push(`Night at ${c.p.n}`); }
+      else if (!c.p) { ACT.seen[key].ask = 'night'; ACT.seen[key].lat = st.lat; ACT.seen[key].lng = st.lng; }
+      continue;
+    }
+    const day = getDay(date);
+    // a planned block of the same kind at the same place (or no place yet) → mark it done with the real times
+    let b = day?.blocks.find(x => (x.st === 'plan' || x.st === 'active') && (x.poi === c.p.id || (!x.poi && x.t === c.t)) && (BT[x.t]?.m?.(c.p) || x.t === c.t));
+    if (!b) {
+      const d = ensureDay(date);
+      b = { id: uid(), t: c.t, dur: Math.round(c.min), st: 'plan', poi: c.p.id, pinned: true };
+      const at = d.blocks.findIndex(x => x.st !== 'done' && !(x.s0 && x.s0 < st.s));
+      d.blocks.splice(at < 0 ? d.blocks.length : at, 0, b);
+      const si = d.blocks.findIndex(x => x.t === 'sleep'); if (si >= 0 && si < d.blocks.length - 1) d.blocks.push(...d.blocks.splice(si, 1));
+    }
+    b.poi = c.p.id; b.s0 = st.s; b.st = 'active';
+    completeBlock(b, st.e, st.src);
+    done.push(`${BT[b.t].n}: ${c.p.n} (${fmtDur(c.min)})`);
+  }
+  for (const r of dashRuns(sts)) {
+    const key = 'dd' + Math.round(r.s / MIN);
+    if (ACT.seen[key] || now - r.e < 30 * MIN) continue;
+    ACT.seen[key] = { t: now, s: r.s, e: r.e, k: 'dash', ask: 'dash', n: r.n };
+  }
+  if (done.length) save();
+  actSave();
+  return done;
+}
+// arrive / leave while the app is open: start the next planned block when he's at its place; finish the active one when he's left
+function arriveLeave() {
+  const l = liveLoc(10 * MIN), day = getDay(today());
+  if (!S.settings.autotrack || !l || (l.acc || 0) > 250 || !day) return null;
+  const act = day.blocks.find(b => b.st === 'active' && b.poi && P[b.poi] && ptOf(P[b.poi]) && !BT[b.t]?.night);
+  const apt = act && ptOf(P[act.poi]);
+  // only end it if he was actually there during the block (he may have tapped Start before driving over)
+  const wasThere = apt && (act.auto === 'arrived' || ACT.pts.some(p => (p.t2 || p.t) > act.s0 && hav(p, apt) < 0.12) || ACT.pings.some(p => p.t > act.s0 - 10 * MIN && hav(p, apt) < 0.2));
+  if (act && wasThere && hav(l, apt) > 0.3 && Date.now() - act.s0 > 15 * MIN) {
+    const pt = apt;
+    const on = ACT.pings.find(p => p.ev === 'on' && p.t > act.s0 && hav(p, pt) < 0.2);
+    const seen = ACT.pts.filter(p => (p.t2 || p.t) > act.s0 && hav(p, pt) < 0.12).reduce((a, p) => Math.max(a, p.t2 || p.t), act.s0);
+    const end = on ? on.t : Math.max(seen, Math.min(act.s0 + act.dur * MIN, Date.now()));
+    const msg = completeBlock(act, end, 'left');
+    save();
+    return { kind: 'left', b: act, msg };
+  }
+  if (act) return null;
+  const next = day.blocks.find(b => b.st === 'plan' && b.poi && P[b.poi] && BT[b.t]?.m);
+  if (next && hav(l, ptOf(P[next.poi])) < 0.1 && !next.noAuto) {
+    const arrived = ACT.pts.filter(p => hav(p, l) < 0.1 && (p.t2 || p.t) > Date.now() - 6 * HOUR).reduce((a, p) => Math.min(a, p.t), Date.now());
+    const off = ACT.pings.filter(p => p.ev === 'off' && hav(p, l) < 0.2 && p.t > Date.now() - 6 * HOUR).pop();
+    next.st = 'active'; next.s0 = off ? off.t : arrived; next.auto = 'arrived';
+    save();
+    return { kind: 'arrived', b: next };
+  }
+  return null;
+}
+
+// ---------- look up any place (OpenStreetMap via Photon: free, no key, CORS-enabled)
+const PHOTON = 'https://photon.komoot.io';
+async function photon(path) {
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 12000);
+  try { const r = await fetch(PHOTON + path, { signal: ctl.signal }); if (!r.ok) throw new Error('lookup failed (' + r.status + ')'); return (await r.json()).features || []; }
+  finally { clearTimeout(tm); }
+}
+function photonPlace(f) {
+  const p = f.properties || {}, [lng, lat] = f.geometry?.coordinates || [];
+  const street = [p.housenumber, p.street].filter(Boolean).join(' '), city = p.city || p.town || p.village || p.district || '';
+  const st = p.state === 'Florida' ? 'FL' : p.state || '';
+  return { n: p.name || street || 'Unnamed spot', a: [street, city, [st, p.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', '), city, lat, lng,
+    osm: (p.osm_type || '') + (p.osm_id || ''), key: p.osm_key, val: p.osm_value };
+}
+async function searchPlaces(q, near = here()) {
+  return (await photon(`/api/?q=${encodeURIComponent(q)}&lat=${near.lat.toFixed(4)}&lon=${near.lng.toFixed(4)}&limit=15`)).map(photonPlace).filter(x => x.lat != null);
+}
+async function placesAround(pt) {
+  const list = (await photon(`/reverse?lat=${pt.lat.toFixed(5)}&lon=${pt.lng.toFixed(5)}&limit=15&radius=0.5`)).map(photonPlace);
+  return list.filter(x => x.lat != null && x.key !== 'highway' && x.key !== 'place' && x.key !== 'boundary');
+}
+function guessKind(x) {
+  const n = (x.n || '').toLowerCase(), v = x.val || '', k = x.key || '';
+  if (/walmart/.test(n)) return 'walmart';
+  if (/cracker barrel/.test(n)) return 'cracker';
+  if (/pilot|flying j|love'?s travel|travel ?center|petro |truck stop/.test(n)) return 'truck';
+  if (/planet fitness/.test(n) || v === 'fitness_centre') return 'gym';
+  if (k === 'tourism' && /hotel|motel|guest_house|hostel/.test(v)) return 'hotel';
+  if (v === 'camp_site' || v === 'caravan_site') return 'camp';
+  if (/kava|tea house|teahouse/.test(n)) return 'kava';
+  if (v === 'cafe' || /coffee|café|cafe/.test(n)) return 'cafe';
+  if (v === 'library') return 'library';
+  if (/pizz/.test(n)) return 'pizza';
+  if (v === 'cinema' || (/cinema|theatre|theater|drive-in/.test(n) && k === 'amenity')) return 'movie';
+  if (v === 'amusement_arcade' || /arcade|pinball/.test(n)) return 'arcade';
+  if (['restaurant', 'fast_food', 'food_court'].includes(v)) return 'food';
+  if (['bar', 'pub', 'nightclub', 'biergarten'].includes(v)) return 'bar';
+  if (['supermarket', 'grocery', 'greengrocer'].includes(v)) return 'groc';
+  if (v === 'fuel') return 'gas';
+  if (v === 'laundry' || v === 'dry_cleaning') return 'laundry';
+  if (v === 'nature_reserve' || /trail|preserve/.test(n)) return 'run';
+  if (/beach|marina|slipway|pier/.test(v) || /beach|landing|boat ramp|pier|causeway/.test(n) || v === 'park') return 'water';
+  if (v === 'parking') return 'lot';
+  return 'other';
 }
 
 // ---------- directions

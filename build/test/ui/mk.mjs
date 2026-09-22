@@ -15,7 +15,7 @@ const post = `<script>const iv=setInterval(()=>{if(typeof D==="undefined"||!D||d
 try{S.settings.theme=Q.get("theme")||"light";applyTheme();if(Q.get("tpl")&&!getDay(today()))A.useTpl({id:Q.get("tpl")});
 const d=Q.get("do"),day=getDay(today());
 if(d==="block")A.openBlock({id:day.blocks[Q.get("i")|0].id});if(d==="tab")A.tabTo({t:Q.get("t")});if(d==="list")A.needList({t:Q.get("t")||"sleep"});
-if(d==="add")A.addBlockSheet();if(d==="dev")A.devPick();if(d==="zone")A.openZone({z:Q.get("z")});if(d==="pid")A.openPlace({id:Q.get("id")});
+if(d==="add")A.addBlockSheet();if(d==="act")A[Q.get("name")](Object.fromEntries(Q));if(d==="dev")A.devPick();if(d==="zone")A.openZone({z:Q.get("z")});if(d==="pid")A.openPlace({id:Q.get("id")});
 if(Q.get("scroll"))setTimeout(()=>scrollTo(0,+Q.get("scroll")),100);if(Q.get("ss"))setTimeout(()=>{document.getElementById("sheet").scrollTop=+Q.get("ss")},150);
 }catch(e){ERR(e.stack)}},200)</script>`;
 fs.mkdirSync(OUT, { recursive: true });

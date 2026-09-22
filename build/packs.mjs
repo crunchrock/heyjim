@@ -7,9 +7,9 @@ import path from 'node:path';
 export const COLLECTIONS = ['zones', 'pois', 'capabilities', 'overnight_candidates', 'camping', 'mail_options', 'recreation',
   'food_options', 'meal_offers', 'doordash_markets', 'operating_clusters', 'planning_actions', 'research_gaps', 'sources', 'policies'];
 
-export function loadPacks(root) {
+export function loadPacks(root, skip) {
   const dir = path.join(root, 'packs');
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json') && !f.startsWith('_')).sort();
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json') && !f.startsWith('_') && path.join(dir, f) !== skip).sort();
   if (!files.length) throw new Error('No packs found in ' + dir);
   const out = { manifest: {}, packs: [] };
   const maps = Object.fromEntries(COLLECTIONS.map(c => [c, new Map()]));
@@ -38,7 +38,16 @@ export function loadPacks(root) {
   const byId = new Map(out.pois.map(p => [p.id, p]));
   for (const f of files) {
     const b = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-    for (const pt of b.poi_patches || []) { const p = byId.get(pt.id); if (p) Object.assign(p, { ...pt, id: p.id }); }
+    for (const pt of b.poi_patches || []) {
+      const p = byId.get(pt.id);
+      if (!p) continue;
+      // list fields add up (a patch tagging a place "wonder" keeps its other tags); everything else overwrites
+      const merged = { ...pt, id: p.id };
+      for (const k of ['tags', 'amenities', 'source_ids']) if (Array.isArray(pt[k]) && Array.isArray(p[k])) merged[k] = [...new Set([...p[k], ...pt[k]])];
+      // two packs adding specials to the same bar: keep both lists (same label + days + start = same special, newer wins)
+      for (const k of ['specials', 'bar_specials']) if (Array.isArray(pt[k]) && Array.isArray(p[k])) { const m = new Map(); for (const x of [...p[k], ...pt[k]]) m.set([x.label, (x.days || []).join(), x.start].join('|'), x); merged[k] = [...m.values()]; }
+      Object.assign(p, merged);
+    }
   }
   const profPath = path.join(dir, '_profile.json');
   out.profile = fs.existsSync(profPath) ? JSON.parse(fs.readFileSync(profPath, 'utf8')) : {};

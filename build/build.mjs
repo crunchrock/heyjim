@@ -88,6 +88,18 @@ const pois = bundle.pois.map(p => {
     lotRepair: p.lot_repairs_permitted ?? p.parking_lot_repairs_permitted ?? null,
     kratom: p.work_details?.sells_kratom ?? null,
     laptop: p.work_details?.laptop_friendly ?? null,
+    outlets: p.work_details?.outlets_confirmed || null,
+    brand: p.brand,
+    // Guy Fieri's Diners, Drive-ins and Dives
+    ddd: p.ddd ? clean({ s: p.ddd.season, ep: p.ddd.episode, et: p.ddd.episode_title, ad: p.ddd.air_date, dishes: p.ddd.dishes, open: p.ddd.still_open, chk: p.ddd.status_checked, ev: p.ddd.status_evidence, src: p.ddd.source_id }) : null,
+    // Anthony Bourdain ("Tony's picks")
+    tony: p.bourdain ? clean({ show: p.bourdain.show, s: p.bourdain.season, ep: p.bourdain.episode, et: p.bourdain.episode_title, ad: p.bourdain.air_date, what: p.bourdain.what, open: p.bourdain.still_open, chk: p.bourdain.status_checked, ev: p.bourdain.status_evidence, src: p.bourdain.source_id }) : null,
+    theater: p.theater ? clean({ chain: p.theater.chain, url: p.theater.showtimes_url, screens: p.theater.screens, fmt: p.theater.formats, alist: p.theater.a_list, price: p.theater.price_note, notes: p.theater.notes }) : null,
+    buffet: p.buffet ? clean({ l: p.buffet.lunch_price, d: p.buffet.dinner_price, w: p.buffet.weekend_price, lh: p.buffet.lunch_hours, kids: p.buffet.kids_note, chk: p.buffet.price_checked, posted: p.buffet.price_posted, src: p.buffet.price_source_id, notes: p.buffet.notes }) : null,
+    arcade: p.arcade ? clean({ games: p.arcade.games, pricing: p.arcade.pricing, age: p.arcade.age_policy, notes: p.arcade.notes }) : null,
+    trail: p.trail ? clean({ mi: p.trail.miles, loops: p.trail.loops, surface: p.trail.surface, terrain: p.trail.terrain, scenery: p.trail.scenery, shade: p.trail.shade, parking: p.trail.parking,
+      fee: p.trail.fee, hours: p.trail.hours_note, hazards: p.trail.hazards, r: p.trail.rating, rc: p.trail.rating_count, rs: p.trail.rating_source, why: p.trail.why }) : null,
+    wonder: p.wonder ? clean({ k: p.wonder.kind, why: p.wonder.why, swim: p.wonder.swim, fee: p.wonder.fee, best: p.wonder.best_time }) : null,
   });
   const fvS = p.food_value || {};
   const fv = clean({ cu: fvS.cuisine, asian: fvS.asian ? 1 : null, pl: fvS.price_level ?? null, usd: fvS.typical_meal_usd ?? null, r: fvS.rating ?? null, rc: fvS.rating_count ?? null,
@@ -113,8 +125,60 @@ const pois = bundle.pois.map(p => {
   });
 });
 
+// ---- the same place researched by two packs under different ids: merge into the first one (richer facts win per field)
+// and keep an alias so saved plans / notes that reference the dropped id still resolve.
+const alias = {};
+{
+  const norm = t => String(t || '').toLowerCase().replace(/&/g, 'and').replace(/['’]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const street = a => norm(String(a || '').split(',')[0]).replace(/\b(street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|highway|hwy|parkway|pkwy|lane|ln|north|south|east|west|n|s|e|w)\b/g, '').replace(/\s+/g, ' ').trim();
+  const mi = (a, b) => { const R = 3958.8, r = Math.PI / 180, x = Math.sin((b.lat - a.lat) * r / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin((b.lng - a.lng) * r / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
+  // names match if they're equal, or share their first distinctive word (Giuseppe's NY Pizza ≈ Giuseppe's NY Pizza & Pasta Express)
+  const GENERIC = new Set(['the', 'and', 'of', 'at', 'pizza', 'pizzeria', 'restaurant', 'grill', 'bar', 'cafe', 'coffee', 'co', 'company', 'kitchen', 'house', 'shop', 'store', 'express', 'ny', 'new', 'york', 'inn', 'suites', 'by', 'hotel', 'park', 'st', 'saint', 'fl']);
+  const key = n => norm(n).split(' ').filter(w => w && !GENERIC.has(w));
+  // …and one name's words contain the other's, or they overlap ≥60% (Park West Gulf Side ≠ Park West Sound Side)
+  const sameName = (a, b) => {
+    if (norm(a.n) === norm(b.n)) return true;
+    const x = key(a.n), y = key(b.n);
+    if (!x.length || !y.length || x[0] !== y[0] || x[0].length <= 3 || a.c !== b.c) return false;
+    const X = new Set(x), Y = new Set(y), both = [...X].filter(w => Y.has(w)).length;
+    return both === X.size || both === Y.size || both / new Set([...X, ...Y]).size >= 0.6;
+  };
+  const pairs = [];
+  for (let i = 0; i < pois.length; i++) for (let j = i + 1; j < pois.length; j++) {
+    const a = pois[i], b = pois[j];
+    if (a.c === 'mine' || b.c === 'mine' || !sameName(a, b)) continue;
+    const sameStreet = street(a.a) && street(a.a) === street(b.a) && /^\d/.test(String(a.a || '').trim());
+    const close = a.lat != null && b.lat != null && a.gq !== 'city' && b.gq !== 'city' && a.gq !== 'approx' && b.gq !== 'approx' && mi(a, b) < (norm(a.n) === norm(b.n) ? 0.12 : 0.08);
+    if (sameStreet || close) pairs.push([a, b]);
+  }
+  const drop = new Set();
+  {
+    for (const [a, b] of pairs) {
+      if (drop.has(a.id) || drop.has(b.id)) continue;
+      // merge b into a
+      a.caps ||= {};
+      for (const [c, e] of Object.entries(b.caps || {})) { const pe = a.caps[c]; if (!pe || pe === 'i' || (pe === 'r' && e === 'd')) a.caps[c] = e; }
+      for (const k of ['fv', 'bd', 'h', 'web', 'ph', 'tn', 'wf', 'lat', 'lng', 'gq', 'q']) if (a[k] == null && b[k] != null) a[k] = b[k];
+      if (!a.sp?.length && b.sp?.length) a.sp = b.sp;
+      a.tags = [...new Set([...(a.tags || []), ...(b.tags || [])])];
+      a.am = [...new Set([...(a.am || []), ...(b.am || [])])];
+      a.x = { ...b.x, ...a.x };
+      a.src = [...new Set([...(a.src || []), ...(b.src || [])])];
+      a.capn = [...(a.capn || []), ...(b.capn || [])];
+      // "Manatee Springs State Park" beats "Manatee Springs State Park - North End Trails" as the name
+      if (norm(a.n).startsWith(norm(b.n)) && norm(b.n).length < norm(a.n).length) a.n = b.n;
+      drop.add(b.id); alias[b.id] = a.id;
+      if (process.env.DEBUG_MERGE) console.log(`  merge ${b.id} → ${a.id} (${b.n} | ${a.n})`);
+    }
+  }
+  if (drop.size) {
+    for (let i = pois.length - 1; i >= 0; i--) if (drop.has(pois[i].id)) pois.splice(i, 1);
+    console.log('merged duplicate places:', drop.size);
+  }
+}
+
 // ---- overlays keyed by poi id
-const byPoi = (arr, fn) => { const o = {}; for (const r of arr) { const v = fn(r); if (v) (o[r.poi_id] ||= []).push(v); } return o; };
+const byPoi = (arr, fn) => { const o = {}; for (const r of arr) { const v = fn(r); if (v) (o[alias[r.poi_id] || r.poi_id] ||= []).push(v); } return o; };
 const ovn = byPoi(bundle.overnight_candidates, o => clean({
   ty: o.type, st: o.status, pr: o.assessment?.priority, why: o.assessment?.rationale, gray: o.gray_area ? 1 : 0,
   perm: o.permission_status, conf: o.confidence, notes: o.notes, fc: o.field_check,
@@ -153,7 +217,7 @@ const dd = {};
 for (const m of bundle.doordash_markets) (dd[m.zone_id] ||= []).push(clean({
   n: m.name, lat: m.center_lat, lng: m.center_lon, win: m.recommended_windows, avoid: m.avoid_windows,
   score: m.scores?.overall, conf: m.confidence, adv: m.advantages, prob: m.problems,
-  subs: (m.target_subzones || []).map(s => clean({ n: s.name, poi: s.poi_id, d: s.description })), inc: m.demographics?.median_household_income_usd,
+  subs: (m.target_subzones || []).map(s => clean({ n: s.name, poi: alias[s.poi_id] || s.poi_id, d: s.description })), inc: m.demographics?.median_household_income_usd,
   basis: m.window_basis,
 }));
 
@@ -169,7 +233,7 @@ const zones = bundle.zones.map(z => {
   if (clat == null && FALLBACK[z.id]) [clat, clng] = FALLBACK[z.id];
   if (clat == null) console.warn('zone without any location:', z.id);
   return clean({
-  id: z.id, n: z.name, r: z.region, lat: clat, lng: clng, o: z.route_order, inland: inland.has(z.id) ? 1 : null, q: z.navigation_query,
+  id: z.id, n: z.name, r: z.region, lat: clat, lng: clng, o: z.route_order, inland: inland.has(z.id) ? 1 : null, q: z.navigation_query, tv: z.tv_only ? 1 : null,
   ct: z.timezone === 'America/Chicago' ? 1 : null, stay: z.recommended_stay_days ? [z.recommended_stay_days.min, z.recommended_stay_days.max] : null,
   best: z.best_for, weak: z.weaknesses, lb: z.legacy_best_for,
   rec: [...new Set([...(z.recommended_waterfront_ids || []), ...(z.recommended_work_ids || []), ...(z.recommended_pf_ids || []),
@@ -183,13 +247,15 @@ for (const pl of bundle.profile.places || []) {
   pois.push(clean({ id: 'me_' + pl.id, z: z.id, n: pl.name, c: 'mine', sc: pl.kind, a: pl.address, city: pl.city, lat: pl.lat, lng: pl.lng, gq: 'exact',
     web: pl.website, caps: { [pl.kind]: 'd' }, am: [], tags: [], tn: pl.notes, q: pl.search_query, x: {} }));
 }
-const usedSrc = new Set(pois.flatMap(p => p.src || []));
+// sources a place cites, plus the ones behind its specials / buffet prices / TV features (shown as "source" links)
+const usedSrc = new Set(pois.flatMap(p => [...(p.src || []), ...(p.sp || []).map(x => x.src), p.x?.buffet?.src, p.x?.ddd?.src, p.x?.tony?.src].filter(Boolean)));
 const sources = {};
 for (const s of bundle.sources) if (usedSrc.has(s.id)) sources[s.id] = [s.title || s.publisher || s.url, s.url];
 
 const data = {
   v: bundle.manifest.version, researched: bundle.manifest.research_date, built: new Date().toISOString(),
   packs: bundle.packs, profile: bundle.profile,
+  alias,
   sync: secret.sync_token ? { repo: secret.sync_repo || 'crunchrock/heyjim-data', path: 'state.json', token: secret.sync_token } : null, route: bundle.manifest.route_visit_sequence, zones, pois, ovn, camp, mail, rec, food, dd, sources,
 };
 

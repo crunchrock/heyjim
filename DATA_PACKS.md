@@ -2,7 +2,7 @@
 
 A data pack is one JSON file in `packs/` (private, gitignored) using the schema of `florida_mobile_dev_agent_bundle_v3.json`. `build/packs.mjs` merges all packs in filename order, so name new ones to sort last (`2026-10-02-georgia-coast.json`). Files starting with `_` are not packs.
 
-**Merge rules.** A record whose `id` already exists is **upserted**: non-null fields from the later pack win, nulls never erase known facts, and `source_ids` are unioned. To change a few fields of an existing place without restating it, use `poi_patches: [{ "id": "...", ...fields }]`.
+**Merge rules.** A record whose `id` already exists is **upserted**: non-null fields from the later pack win, nulls never erase known facts, and `source_ids` are unioned. To change a few fields of an existing place without restating it, use `poi_patches: [{ "id": "...", ...fields }]` (fields overwrite, except `tags`, `amenities` and `source_ids`, which add up).
 
 **Where packs come from.** ChatGPT Pro deep research, using the app's copyable prompt (Places → "Need an area that isn't here?") or `packs/_RESEARCH_PROMPT_gaps.md`, or Claude research agents (see CLAUDE.md → Research new data). Then run `node build/geocode.mjs && node build/build.mjs && node build/test/smoke.mjs`, commit and push.
 
@@ -25,24 +25,30 @@ Top-level arrays: `zones`, `pois`, `capabilities`, `overnight_candidates`, `camp
 |---|---|
 | waterfront | park, beach_lot, boat_ramp, pier (anything; waterfront = water spot) |
 | work | library, independent_cafe, regional_cafe, chain_cafe (Panera is detected by name), kava_bar, tea_house, bookstore_cafe |
-| food | local_cheap, fast_food, steakhouse, ramen_restaurant, buffet, mall, walmart_supercenter, trader_joes, publix, sprouts, whole_foods, grocery |
-| social | dive_bar, hipster_dive, barcade, craft_beer, cocktail_bar, live_music |
+| food | local_cheap, pizza, diner, bbq, fast_food, steakhouse, ramen_restaurant, buffet, mall, walmart_supercenter, trader_joes, publix, sprouts, whole_foods, grocery |
+| social | dive_bar, hipster_dive, barcade, craft_beer, cocktail_bar, live_music, strip_club (own Clubs list; never auto-picked for a Bar night) |
 | gym | planet_fitness |
 | overnight_candidate | hotel, walmart, cracker_barrel, truck_stop, rest_area, outdoor_retailer, casino |
 | shop | vape_shop, smoke_shop |
 | life_support | laundromat, travel_center, murphy_usa, circle_k, quiktrip, bucees |
-| fun | used_bookstore, trailhead, nature_preserve, spring_state_park, flea_antique_market, … |
+| fun | used_bookstore, trailhead, nature_preserve, state_park, state_forest, greenway, spring, sinkhole, waterfall, cave, flea_antique_market, … |
 | camping, car_maintenance (parts_store), mail | as in the base pack |
 
 Hours strings: `"07:00-21:00"`, split ranges `"11:00-14:30;17:00-22:00"`, overnight `"16:00-02:00"`, sun tokens (`"sunrise-sunset"`, `"dawn-23:00"`, `"daylight"`), `"closed"`, or `null` if unknown. `"00:00-24:00"` means open 24h.
 
-**capabilities[]**: `id`, `poi_id`, `zone_id`, `capability`, `evidence_level` (documented | reported | inferred; shown as Confirmed / Reported / not shown), `assessment_note`, `conditions[]`, `source_ids[]`. Capabilities the app uses: `work_indoor, work_outdoors, wifi, gym, shower, sleep_candidate, tent_camp, paid_lodging, meal, protein_food, ramen, buffet, all_you_can_eat, groceries, daily_supplies, buy_drinking_water, water_source_candidate, laundry, mail, auto_parts, repair_support, auto_service, loan_tools, public_grill, restroom, restroom_candidate, recreation, fuel, vape`.
+**capabilities[]**: `id`, `poi_id`, `zone_id`, `capability`, `evidence_level` (documented | reported | inferred; shown as Confirmed / Reported / not shown), `assessment_note`, `conditions[]`, `source_ids[]`. Capabilities the app uses: `work_indoor, work_outdoors, wifi, gym, shower, sleep_candidate, tent_camp, paid_lodging, meal, protein_food, ramen, buffet, all_you_can_eat, groceries, daily_supplies, buy_drinking_water, water_source_candidate, laundry, mail, auto_parts, repair_support, auto_service, loan_tools, public_grill, restroom, restroom_candidate, recreation, fuel, vape, trail_run, swim`.
 
 **Optional POI objects**
 - `food_value` (ratings for ANY place type): `{cuisine, asian, price_level 1–4, typical_meal_usd, rating, rating_count, rating_source, rating_checked, known_for_cheap, cheap_evidence}`. Meals rank by value: a high rating, being cheap, and "known for cheap" all win; Asian gets a nudge; $$$ is flagged "Pricey".
 - `specials` (alias `bar_specials`): `[{label, days: ["tuesday",…], start "HH:MM", end "HH:MM", items: ["$5 Old Fashioned"], posted_date (when the source set or updated it), checked_date, confidence: official|social_post|third_party|review_mention, source_id}]`. Used for bar happy hours and meat-deal nights. The app shows the posted and checked dates.
 - `bar_details` (bars): `{kind, vibe, games, food, price_level, rating, rating_count, rating_source}`.
 - `work_details` (cafés, kava, tea): `{wifi_advertised, outlets_confirmed, laptop_friendly, sells_kratom}`. `sells_kratom: true` hides the place from work spots.
+
+- `ddd` (Guy Fieri's Diners, Drive-ins and Dives; add tag `ddd`): `{season, episode, episode_title, air_date, dishes[], still_open, status_checked, status_evidence, source_id}`. Shown as "Guy's pick".
+- `trail` (trail runs; add tag `trail_run` + capability `trail_run`): `{miles, loops[], surface, terrain rugged|rolling|flat, scenery, shade, parking, fee, hours_note, hazards, rating, rating_count, rating_source, why}`. Rugged, dirt and well-rated rank first.
+- `wonder` (natural wonders; tags `wonder` + the kind): `{kind waterfall|sinkhole|spring|cave|river|overlook, why, swim, fee, best_time}`.
+- `brand` (top level, chains) and tags `crave` (cult chains) / `quirky` (one-of-a-kind spots) / `pizza`, `local_gem`, `dine_in`, `late_night` / `strip_club`. A special labeled "Ladies' night" lands in the Ladies' nights list.
+- Places researched twice under different ids (same name, same street or within ~200 m) are merged by the build; the dropped id becomes an alias so saved plans still resolve.
 
 **overnight_candidates[]**: `poi_id`, `type` (walmart | planet_fitness | cracker_barrel | truck_stop | hotel_cluster | rest_area | outdoor_retailer | casino | public_lot), `status` (uncertain | mixed_reports | prohibited), `gray_area`, `permission_status`, `confidence`, `notes`, `field_check[]`, `tow_reports`, `security_knock_reports`, `open_24h_nearby`, `assessment {priority: inspect_first | alternative | extra_friction | not_for_auto_selection, rationale}`, `reports[]`, `latest_report_date`.
 
