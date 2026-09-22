@@ -383,7 +383,9 @@ function placeChips(p, type, ts, dur) {
     if (ss.now) out.push(liveChip(ss.now, p));
     else if (ss.next) out.push(chip(`${specialLabel(ss.next.x, p)} ${fmtClock(ss.next.start)}${ss.next.end != null ? '–' + fmtClock(ss.next.end) : ''} · ${specialWhat(ss.next.x)}`, 'acc'));
     else if (ss.today.length) out.push(chip('Today: ' + ss.today.map(specialWhat).slice(0, 2).join(' · '), 'acc'));
-    else if (p.sp?.length) out.push(chip('Specials ' + [...new Set(p.sp.map(x => dayNames(x.d)))].join(', ')));
+    else if (p.sp?.some(x => !x.dt)) out.push(chip('Specials ' + [...new Set(p.sp.filter(x => !x.dt).map(x => dayNames(x.d)))].join(', ')));
+    const ev = (p.sp || []).filter(x => x.dt && x.dt >= dayKey()).sort((a, z) => a.dt.localeCompare(z.dt))[0];
+    if (ev && !ss.today.includes(ev)) out.push(chip(`${new Date(ev.dt + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: ${ev.l || 'Event'}`, 'acc'));
     if (p.bd?.k) out.push(chip(p.bd.k.replace(/_/g, ' ')));
   }
   for (const [t, c] of wfChips(p).slice(0, type && /water|grill/.test(type) ? 4 : 2)) out.push(chip(t, c));
@@ -1442,7 +1444,7 @@ function barHtml(p) {
   const t = x => (x ? fmtClock(+x.split(':')[0] * 60 + +x.split(':')[1]) : '');
   return (p.bd ? `<h2>Bar</h2><div class="card"><div class="chips">${b.k ? chip(b.k.replace(/_/g, ' ')) : ''} ${b.pl ? chip('$'.repeat(b.pl)) : ''} ${b.r ? chip(`★${b.r}${b.rc ? ' · ' + b.rc : ''}`, 'ok') : ''}</div>
     ${b.vibe ? `<p class="note">${esc(b.vibe)}</p>` : ''}${b.games ? `<p class="note">Games: ${esc(b.games)}</p>` : ''}${b.food ? `<p class="note">Food: ${esc(b.food)}</p>` : ''}</div>` : '') + `
-    <h2>${p.c === 'social' ? 'Specials' : 'Deals'}</h2>${p.sp?.length ? p.sp.map(x => `<div class="card"><b>${esc(x.l || 'Special')}</b> <span class="muted small">· ${dayNames(x.d)}${x.s ? ' ' + t(x.s) + (x.e ? '–' + t(x.e) : '') : ''}</span>
+    <h2>${p.c === 'social' ? 'Specials' : 'Deals'}</h2>${p.sp?.length ? p.sp.map(x => `<div class="card"><b>${esc(x.l || 'Special')}</b> <span class="muted small">· ${x.dt ? new Date(x.dt + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : x.unk ? 'day unconfirmed' : dayNames(x.d)}${x.s ? ' ' + t(x.s) + (x.e ? '–' + t(x.e) : '') : ''}</span>
       ${x.items?.length ? `<div class="note">${x.items.map(esc).join(' · ')}</div>` : ''}
       <div class="tiny faint" style="margin-top:4px">${x.posted ? 'Posted ' + fmtD(x.posted) + ' · ' : 'Post date unknown · '}checked ${fmtD(x.checked) || '?'}${x.conf ? ' · ' + x.conf.replace(/_/g, ' ') : ''}${x.src && D.sources[x.src] ? ` · <a href="${esc(D.sources[x.src][1])}" target="_blank" rel="noopener">source</a>` : ''}</div></div>`).join('') : '<p class="note">No current specials found. Worth asking the bartender.</p>'}`;
 }

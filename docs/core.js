@@ -493,7 +493,9 @@ function runBonus(p) {
 function specialsAt(p, ts = Date.now()) {
   if (!p.sp?.length) return { today: [], now: null };
   const { dow, min } = tzParts(new Date(ts), p.ct);
-  const today = p.sp.filter(x => !x.d?.length || x.d.includes(dow));
+  // weekly specials by weekday; one-off events (dt) only on their date
+  const dd = new Date(ts), ymd = `${dd.getFullYear()}-${pad(dd.getMonth() + 1)}-${pad(dd.getDate())}`;
+  const today = p.sp.filter(x => !x.unk && (x.dt ? x.dt === ymd : !x.d?.length || x.d.includes(dow)));
   const hm = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
   const now = today.find(x => x.s && x.e && min >= hm(x.s) && min < (hm(x.e) <= hm(x.s) ? hm(x.e) + 1440 : hm(x.e))) || null;
   return { today, now };

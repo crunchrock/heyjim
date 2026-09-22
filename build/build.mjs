@@ -108,7 +108,7 @@ const pois = bundle.pois.map(p => {
   const bd = clean({ k: bdS.kind, vibe: bdS.vibe, games: bdS.games, food: bdS.food, pl: bdS.price_level ?? null, r: bdS.rating ?? null, rc: bdS.rating_count ?? null, rs: bdS.rating_source });
   // packs name the deal text differently (items / description / deal): normalize, and drop specials with no text at all
   const sp = (p.bar_specials || p.specials || []).map(x => clean({ l: x.label || x.name, d: (x.days || []).map(d => DAYS.indexOf(String(d).toLowerCase())).filter(i => i >= 0), s: x.start, e: x.end,
-    items: x.items?.length ? x.items : x.description ? [x.description] : x.deal ? [x.deal] : null, posted: x.posted_date, checked: x.checked_date, conf: x.confidence, src: x.source_id })).filter(x => x.l || x.items?.length);
+    items: x.items?.length ? x.items : x.description ? [x.description] : x.deal ? [x.deal] : null, dt: x.date, unk: !(x.days || []).length && !x.date && /not (confirmed|published|known)|unconfirmed|unknown/i.test([x.label, ...(x.items || []), x.description].join(' ')) ? 1 : null, posted: x.posted_date, checked: x.checked_date, conf: x.confidence, src: x.source_id })).filter(x => x.l || x.items?.length);
   return clean({
     id: p.id, z: p.zone_id, n: p.name, c: p.category, sc: p.subcategory,
     fv, bd, sp,

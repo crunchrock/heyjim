@@ -69,6 +69,7 @@ for (const p of b.pois || []) {
   for (const x of p.specials || []) {
     if (!x.label && !x.items?.length) E(`${w}: special needs a label or items ("description" isn't read)`);
     for (const d of x.days || []) if (!DAYS.includes(d)) E(`${w}: special day ${d}`);
+    if (!(x.days || []).length && !x.date) W(`${w}: special "${x.label}" has no days (= every day). For a one-off event add "date": "YYYY-MM-DD"; if the schedule is unknown, put it in traveler_notes instead.`);
     for (const t of [x.start, x.end]) if (t != null && !/^\d{1,2}:\d{2}$/.test(t)) E(`${w}: special time ${t}`);
   }
   const f = p.food_value;
