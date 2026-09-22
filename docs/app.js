@@ -389,7 +389,8 @@ function placeChips(p, type, ts, dur) {
     if (p.bd?.k) out.push(chip(p.bd.k.replace(/_/g, ' ')));
   }
   for (const [t, c] of wfChips(p).slice(0, type && /water|grill/.test(type) ? 4 : 2)) out.push(chip(t, c));
-  const ln = lastNight(p.id); if (ln && Date.now() - ln < 10 * DAY) out.push(chip('Slept here ' + fmtAgo(ln), 'warn'));
+  const ln = lastNight(p.id); if (ln && Date.now() - ln < 10 * DAY) out.push(chip('Slept here ' + sleptAgo(p.id), 'warn'));
+  else if (type === 'sleep' && alive(S.nights).some(n => n.poi === p.id && n.day === today())) out.push(chip('Tonight’s spot', 'ok'));
   if (S.fav[p.id]) out.push(chip('★ Saved', 'acc'));
   if (p.gq === 'city' || !p.lat) out.push(chip('No map pin'));
   return out.join(' ');
@@ -897,7 +898,7 @@ function nightSheet(id) {
         <div class="blk-acts"><button class="btn sm" data-a="nav" data-id="${p.id}">Go</button><button class="btn sm primary" data-a="reconGood" data-blk="${id}" data-id="${p.id}">✓ Good, sleep here</button><button class="btn sm" data-a="reconBad" data-blk="${id}" data-id="${p.id}">✗ Bad</button></div>
         ${reconOpen === p.id ? `<div class="chips" style="margin-top:8px">${['noparking', 'small', 'vibe', 'security', 'signs', 'bright', 'noisy', 'people'].map(k => `<button class="chip ${x.why?.includes(k) ? 'bad' : ''}" data-a="reconWhy" data-blk="${id}" data-id="${p.id}" data-k="${k}">${OBS_TAGS[k][0]}</button>`).join('')}</div>` : ''}</div>`;
     }).join('')}</div>`;
-    if (tg.some(x => x.st === 'todo')) h += `<button class="btn big primary" data-a="reconNext" data-blk="${id}" style="margin-top:10px">▶ Recon next (nearest unchecked)</button>`;
+    if (!cp && tg.some(x => x.st === 'todo')) h += `<button class="btn big primary" data-a="reconNext" data-blk="${id}" style="margin-top:10px">▶ Recon next (nearest unchecked)</button>`;
   } else h += `<p class="note">Add 2–3 spots to check, or confirm one you already know is good.</p>`;
   h += `<p class="note">On recon: signs, lot size, where cars park, lighting, security patrols, vibe. Know a spot's good? Confirm it straight away.</p>`;
   const opts = nightOptions(from, r.s || Date.now(), from).sort((a, z) => a.mi - z.mi).slice(0, 25);
@@ -1415,13 +1416,13 @@ function wonderHtml(p) {
   return `<h2>🏞️ ${esc((w.k || 'Natural wonder').replace(/^./, c => c.toUpperCase()))}</h2><div class="card">${w.why ? `<p class="note" style="margin-top:0">${esc(w.why)}</p>` : ''}${kv.length ? `<dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}</div>`;
 }
 function ovHtml(p) {
-  const o = p._ov, n = alive(S.nights).filter(x => x.poi === p.id).length;
+  const o = p._ov, n = pastNights(p.id).length;
   const pr = { inspect_first: 'Inspect first', alternative: 'Alternative', extra_friction: 'Extra friction', not_for_auto_selection: 'Do not use' }[o.pr] || o.pr;
   return `<h2>Overnight</h2><div class="card"><div class="chips">${chip(pr || 'Candidate')} ${chip('Permission: ' + (o.perm || 'unknown'), o.perm === 'prohibited' ? 'bad' : '')} ${o.gray ? chip('Gray area', 'warn') : ''} ${o.o24 ? chip('24h nearby', 'ok') : ''}</div>
     ${o.why ? `<p class="note">${esc(o.why)}</p>` : ''}${o.notes ? `<p class="note">${esc(o.notes)}</p>` : ''}
     ${o.fc?.length ? `<p class="note"><b>Check on arrival:</b> ${o.fc.map(esc).join(' · ')}</p>` : ''}
     ${o.tow || o.knock ? `<p class="note" style="color:var(--warn)">Reports: ${esc([o.tow && 'tow: ' + o.tow, o.knock && 'knocks: ' + o.knock].filter(Boolean).join(' · '))}</p>` : ''}
-    <p class="note">You've slept here ${n}×${n ? ', last ' + fmtAgo(lastNight(p.id)) : ''}.</p>
+    <p class="note">You've slept here ${n}×${n ? ', last ' + sleptAgo(p.id) : ''}${alive(S.nights).some(x => x.poi === p.id && x.day === today()) ? ' · it’s tonight’s spot' : ''}.</p>
     <div class="row wrap"><button class="btn sm primary" data-a="slept" data-id="${p.id}">😴 Slept here tonight</button><a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent('iOverlander ' + p.n + ' ' + (p.city || ''))}">iOverlander check-ins</a></div></div>`;
 }
 function campHtml(c) {

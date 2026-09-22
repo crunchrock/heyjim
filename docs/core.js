@@ -423,7 +423,20 @@ function sketchChip(p) {
 }
 const LOT_TYPE = { walmart: 'Walmart lot', planet_fitness: 'PF lot', hotel_cluster: 'Hotel lot', cracker_barrel: 'Cracker Barrel', truck_stop: 'Truck stop', public_lot: 'Public lot', rest_area: 'Rest area (3h limit)', outdoor_retailer: 'Bass Pro / Cabela’s', casino: 'Casino' };
 const lotChip = p => (p._ov ? [LOT_TYPE[p._ov.ty] || 'Lot', ''] : p.caps.tent_camp ? ['Camping', 'ok'] : p.caps.paid_lodging ? ['Paid room', ''] : null);
-function lastNight(id) { let t = 0; for (const n of S.nights) if (!n.del && n.poi === id && n.t > t) t = n.t; return t; }
+// A logged night belongs to a planning day (the evening it started). Confirming tonight's spot logs tonight right away,
+// so "when did I last sleep here" only counts nights before `before` (default: tonight), timed from the morning after.
+const nightDay = n => n.day || dayKey(n.t);
+const nightEnd = n => (n.day ? dateTs(n.day, 31 * 60) : n.t);   // 7am the next morning
+function lastNight(id, before = today()) { let t = 0; for (const n of S.nights) if (!n.del && n.poi === id && nightDay(n) < before) t = Math.max(t, nightEnd(n)); return t; }
+// "last night" / "2 nights ago" / "Sep 14" for the most recent past night at a place ('' if none)
+function sleptAgo(id, before = today()) {
+  let last = null;
+  for (const n of pastNights(id, before)) if (!last || nightDay(n) > last) last = nightDay(n);
+  if (!last) return '';
+  const k = Math.round((dateTs(before, 720) - dateTs(last, 720)) / DAY);
+  return k <= 1 ? 'last night' : k < 7 ? k + ' nights ago' : new Date(dateTs(last, 720)).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+const pastNights = (id, before = today()) => alive(S.nights).filter(n => n.poi === id && nightDay(n) < before);
 function wfChips(p) {
   const w = p.wf; if (!w) return [];
   const obs = obsFor(p.id).flatMap(o => o.tags);
@@ -911,7 +924,7 @@ function flow(day, assign) {
       r.gap = (r.s - ready) / MIN;
       r.e = r.s + b.dur * MIN;
     }
-    if (b.st !== 'done') blockWarnings(b, r);
+    if (b.st !== 'done') blockWarnings(b, r, day.date);
     if (b.st === 'plan' && dest && b.t !== 'travel' && b.t !== 'storage' && !def.night) {
       const away = hav(anchor, dest);
       if (b.t === 'sleep' && b.confirmed) { if (away > 30) { r.warn.push(`Tonight’s spot is ${Math.round(away)} mi from ${atLive ? 'you' : 'the day’s area'}`); r.acts.push(['nightNear', 'Find spots near me']); } }
@@ -938,7 +951,7 @@ function reanchor() {
   if (n) save();
   return n;
 }
-function blockWarnings(b, r) {
+function blockWarnings(b, r, date) {
   const p = b.poi && P[b.poi];
   if (p) {
     r.fit = fit(p, r.s, b.t === 'sleep' ? 0 : b.dur);
@@ -946,7 +959,7 @@ function blockWarnings(b, r) {
     if (r.fit.k === 'closed') r.warn.push(b.t === 'sleep' ? `Business closed overnight (${r.fit.txt.replace('Closed · ', '')}): lot only, no restroom` : 'Closed at that time (' + r.fit.txt.replace('Closed · ', '') + ')');
     else if (r.fit.k === 'short') r.warn.push((sunsetGate ? 'Gate closes around sunset: ' : '') + r.fit.txt + ` of ${fmtDur(b.dur)}`);
     if (/temporarily_closed|announced_not_open/.test(p.st || '')) r.warn.push('Listed as temporarily closed');
-    if (b.t === 'sleep') { const ln = lastNight(p.id); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + fmtAgo(ln) + '. Rotate?'); }
+    if (b.t === 'sleep') { const ln = lastNight(p.id, date || today()); if (ln && Date.now() - ln < 3 * DAY) r.warn.push('You slept here ' + sleptAgo(p.id, date || today()) + '. Rotate?'); }
   } else if (b.t === 'sleep') { if (!(b.recon || []).some(x => P[x.poi])) { r.warn.push('No night spot options yet'); r.acts.push(['addPlaceFor', 'Add a spot you know']); } }
   else if (BT[b.t].m && b.t !== 'travel') { r.warn.push(b.far && P[b.far] ? `No ${lc(BT[b.t].n)} within 15 mi (nearest: ${P[b.far].n}, ${P[b.far].city || ''})` : `No ${lc(BT[b.t].n)} in the data near here`); r.acts.push(['addPlaceFor', 'Add a place']); }
   if (b.t === 'social') {
@@ -1036,7 +1049,7 @@ function completeBlock(b, end = Date.now(), auto) {
   if (ks[0] === 'gym') { logEntry('gym', min, extra); S.last.shower = b.s1; msg = `${WORKOUTS[S.workout % 5].n} logged. Shower ✓`; S.workout = (S.workout + 1) % 5; }
   if (['shower', 'laundry', 'water_refill', 'groceries', 'mail'].includes(ks[0])) S.last[ks[0]] = b.s1;
   if (ks[0] === 'groceries') S.supplies = {};
-  if (b.t === 'sleep' && b.poi && !b.confirmed) { S.nights.push({ poi: b.poi, t: b.s1 }); msg = 'Night logged. Rotation updated.'; }
+  if (b.t === 'sleep' && b.poi && !b.confirmed) { S.nights.push({ poi: b.poi, t: b.s1, day: dayKey(b.s1 - 8 * HOUR) }); msg = 'Night logged. Rotation updated.'; }
   return msg;
 }
 function weekStats(ws = weekStart()) {

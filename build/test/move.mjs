@@ -10,7 +10,7 @@ const ctx = vm.createContext({
   navigator: {}, document: {}, fetch: async () => ({ ok: true, arrayBuffer: async () => fs.readFileSync('docs/data.enc') }),
   setTimeout, clearTimeout,
 });
-vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { get S() { return S; }, set S(v) { S = v; }, D: () => D, P, Z, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, addDays, reanchor, sanitize, mergeState, parsePing, stays, autoTrack, ACT, hav, ptOf, mkBlock, ensureDay, BT, nearbyPoi, dropNights, alive, weekStats };', ctx);
+vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { get S() { return S; }, set S(v) { S = v; }, D: () => D, P, Z, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, addDays, reanchor, sanitize, mergeState, parsePing, stays, autoTrack, ACT, hav, ptOf, mkBlock, ensureDay, BT, nearbyPoi, dropNights, alive, weekStats, lastNight };', ctx);
 const $ = ctx.__;
 const secret = JSON.parse(fs.readFileSync('build/secret.json', 'utf8'));
 const buf = await $.fetchEnc();
@@ -90,6 +90,20 @@ if (pf) {
   ok(g && Math.round((g.s1 - g.s0) / 60000) === 68, 'gym block done with the real times');
   ok($.autoTrack().length === 0, 'the same stay is not logged twice');
 } else ok(false, 'no PF near St. Augustine in the data');
+
+console.log('\n7. Tonight\'s confirmed spot is not "slept here 1m ago"');
+{
+  const d0 = $.getDay($.today()), sb = d0.blocks.find(b => b.t === 'sleep');
+  const spot = sb.recon[0].poi;
+  sb.poi = spot; sb.confirmed = true; sb.pinned = true;
+  $.dropNights(n => n.day === $.today());
+  $.S.nights.push({ poi: spot, t: Date.now(), day: $.today() });
+  const w = $.flow(d0).find(r => r.b === sb).warn;
+  ok(!$.lastNight(spot) && !w.some(x => /slept here/i.test(x)), 'no rotation warning for tonight itself: ' + (w.join(' | ') || 'no warnings'));
+  $.S.nights.push({ poi: spot, t: Date.now() - 2 * 86400e3, day: $.addDays($.today(), -2) });
+  const w2 = $.flow(d0).find(r => r.b === sb).warn;
+  ok(w2.some(x => /slept here 2 nights ago\. Rotate\?/i.test(x)), 'a real night 2 days ago still warns: ' + w2.filter(x => /slept/i.test(x)).join(''));
+}
 
 console.log(fails ? `\n${fails} FAILED` : '\nall ok');
 process.exit(fails ? 1 : 0);
