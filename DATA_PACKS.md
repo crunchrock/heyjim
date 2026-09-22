@@ -40,7 +40,7 @@ Hours strings: `"07:00-21:00"`, split ranges `"11:00-14:30;17:00-22:00"`, overni
 
 **Optional POI objects**
 - `food_value` (ratings for ANY place type): `{cuisine, asian, price_level 1–4, typical_meal_usd, rating, rating_count, rating_source, rating_checked, known_for_cheap, cheap_evidence}`. Meals rank by value: a high rating, being cheap, and "known for cheap" all win; Asian gets a nudge; $$$ is flagged "Pricey".
-- `specials` (alias `bar_specials`): `[{label, days: ["tuesday",…], start "HH:MM", end "HH:MM", items: ["$5 Old Fashioned"], posted_date (when the source set or updated it), checked_date, confidence: official|social_post|third_party|review_mention, source_id}]`. Used for bar happy hours and meat-deal nights. The app shows the posted and checked dates.
+- `specials` (alias `bar_specials`; `label` + `items` required, a `description` field is not read; `date: "YYYY-MM-DD"` instead of `days` for a one-off event; no days = every day): `[{label, days: ["tuesday",…], start "HH:MM", end "HH:MM", items: ["$5 Old Fashioned"], posted_date (when the source set or updated it), checked_date, confidence: official|social_post|third_party|review_mention, source_id}]`. Used for bar happy hours and meat-deal nights. The app shows the posted and checked dates.
 - `bar_details` (bars): `{kind, vibe, games, food, price_level, rating, rating_count, rating_source}`.
 - `work_details` (cafés, kava, tea): `{wifi_advertised, outlets_confirmed, laptop_friendly, sells_kratom}`. `sells_kratom: true` hides the place from work spots.
 
