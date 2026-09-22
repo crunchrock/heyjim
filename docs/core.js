@@ -566,11 +566,13 @@ function specialsNear(from = here(), ts = Date.now(), maxMi = 10, soonMin = 180)
 }
 const dayNames = ds => { const n = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']; return ds?.length && new Set(ds).size < 7 ? ds.map(d => n[d]).join('/') : 'Daily'; };
 const isClub = p => p.sc === 'strip_club' || p.tags.includes('strip_club') || p.bd?.k === 'strip_club';
+// real food at a club (free lunch buffet, steak night, trucker breakfast): lets a club stand in for a Meal while it's on
+const FOOD_SP_RX = /buffet|breakfast|brunch|lunch|dinner|steak|prime rib|\bribs?\b|\bwings?\b|burger|taco|pizza|entr[ée]e|carving|hot dog/i;
+const foodSpecials = p => (p.sp || []).filter(x => FOOD_SP_RX.test(spText(x)));
 function barBonus(p, at) {
   const dow = new Date(at).getDay(), sp = specialsAt(p, at);
   let s = sp.now ? 8 : sp.today.length ? 4 : 0;
-  // a "Bar night" block auto-picks dive bars; clubs are there to browse (Clubs list), not the default pick
-  if (isClub(p)) s -= 8;
+  // clubs rank like any other bar (he asked for this): a cheap buffet or a running drink special is the draw
   const k = p.bd?.k || p.sc || '';
   if (/dive|barcade|hipster/.test(k)) s += dow === 5 || dow === 6 ? 4 : 2;
   if (p.bd?.r >= 4.5) s += 2;
@@ -615,8 +617,8 @@ function nightOut(from = here(), date = today(), now = Date.now()) {
     if (pt) pool.push({ p, mi: hav(from, pt), approx: !!pt.approx });
   }
   const cache = new Map(), spOf = p => { if (!cache.has(p.id)) cache.set(p.id, p.sp?.length ? daySpecials(p, ts, tonight) : []); return cache.get(p.id); };
-  // happy hours at bars and restaurants (clubs have their own section): tonight = on now, later, untimed; another day = by start
-  const hhAll = pool.filter(r => r.p.sp?.length && !r.approx && !isClub(r.p)).map(r => ({ ...r, sp: spOf(r.p).filter(e => !e.past && isDrinkSp(e.x, r.p)) })).filter(r => r.sp.length);
+  // happy hours at bars, restaurants and clubs alike: tonight = on now, later, untimed; another day = by start
+  const hhAll = pool.filter(r => r.p.sp?.length && !r.approx).map(r => ({ ...r, sp: spOf(r.p).filter(e => !e.past && isDrinkSp(e.x, r.p)) })).filter(r => r.sp.length);
   let hhR = 15, hh = hhAll.filter(r => r.mi <= hhR);
   if (!hh.length) hh = hhAll.filter(r => r.mi <= (hhR = 30));
   const grp = r => (r.sp[0].live ? 0 : r.sp[0].soon || (!tonight && r.sp[0].s != null) ? 1 : 2);
@@ -677,7 +679,8 @@ const BT = {
   dash: { n: 'DoorDash', ic: '🚗', dur: 210, log: 'dash', m: p => !!p._dd || p.tags.includes('door_dash') || p.c === 'doordash_cluster', b: p => (p._dd ? 5 + (p._dd.score || 0) / 20 : 0), caps: [], hint: 'One peak block. Don\'t chase red zones 20 miles away.' },
   gym: { n: 'Gym + shower', ic: '🏋️', dur: 80, log: 'gym', m: hasCap('gym'), b: p => (is247(p) ? 3 : 0), caps: ['gym', 'shower'], hint: '' },
   shower: { n: 'Shower', ic: '🚿', dur: 30, log: 'shower', m: p => p.caps.shower || p.am.includes('shower'), b: p => (p.caps.shower ? 2 : 0), caps: ['shower'], hint: 'Outdoor beach showers count too.' },
-  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => p.c === 'food' && !/walmart|grocery|trader|publix|sprouts|whole_foods/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat), b: (p, at) => { const sa = specialsAt(p, at); return valueScore(p) + (p.caps.ramen ? 1 : 0) + (sa.now ? 7 : sa.today.length ? 3 : 0); }, caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
+  meal: { n: 'Meal', ic: '🍜', dur: 50, m: p => (p.c === 'food' && !/walmart|grocery|trader|publix|sprouts|whole_foods/i.test((p.sc || '') + p.n) && !!(p.caps.meal || p.caps.protein_food || p.caps.ramen || p.caps.buffet || p.caps.all_you_can_eat)) || (isClub(p) && foodSpecials(p).length > 0), b: (p, at) => { const sa = specialsAt(p, at); let s = valueScore(p) + (p.caps.ramen ? 1 : 0) + (sa.now ? 7 : sa.today.length ? 3 : 0); // a club is a lunch option only while its food deal is actually on (they're open late, so nothing else should float it up)
+      if (isClub(p)) s += foodSpecials(p).includes(sa.now) ? 4 : -999; return s; }, caps: ['meal', 'protein_food', 'ramen', 'buffet'], hint: 'Protein first. A good Dash can fund this.' },
   grill: { n: 'Grill dinner', ic: '🔥', dur: 90, log: 'water', m: p => p.caps.public_grill || p.am.includes('grill'), b: p => wfBonus(p), caps: ['public_grill'], hint: 'Charcoal, foil, lighter. Check fire rules.' },
   car: { n: 'Car work', ic: '🔧', dur: 120, log: 'car', m: hasCap('auto_parts', 'repair_support', 'auto_service', 'loan_tools'), b: p => (p.caps.loan_tools || p.x.tools ? 3 : 0) + (p.x.lotRepair ? 3 : 0), caps: ['auto_parts', 'loan_tools', 'repair_support'], hint: 'Parts run + lot work. Test drive after.' },
   water: { n: 'Water refill', ic: '💧', dur: 15, log: 'water_refill', m: hasCap('buy_drinking_water', 'water_source_candidate'), b: () => 0, caps: ['buy_drinking_water', 'water_source_candidate'], hint: '3-gal jug at the refill machine (~$1.50).' },

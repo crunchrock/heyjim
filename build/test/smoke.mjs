@@ -8,7 +8,7 @@ const ctx = vm.createContext({
   navigator: {}, document: {}, fetch: async () => ({ ok: true, arrayBuffer: async () => fs.readFileSync('docs/data.enc') }),
   setTimeout, clearTimeout,
 });
-vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, D: () => D, P, Z, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, addDays, hoursState, fit, TEMPLATES, BT, weekStats, logEntry, packPrompt, coverage, fixBlock, dayOrigin, nightOut, specialsAt, daySpecials, isDrinkSp, isBuffetSp, isClub, isGoth, barBonus, dateTs };', ctx);
+vm.runInContext(fs.readFileSync('docs/core.js', 'utf8') + '\n;globalThis.__ = { S, D: () => D, P, Z, fetchEnc, keyFromPassword, decryptData, indexData, rank, newDay, flow, getDay, today, addDays, hoursState, fit, TEMPLATES, BT, weekStats, logEntry, packPrompt, coverage, fixBlock, dayOrigin, nightOut, specialsAt, daySpecials, isDrinkSp, isBuffetSp, isClub, isGoth, barBonus, dateTs, foodSpecials };', ctx);
 const $ = ctx.__;
 const secret = JSON.parse(fs.readFileSync('build/secret.json', 'utf8'));
 const buf = await $.fetchEnc();
@@ -49,7 +49,7 @@ $.S.loc = JAX;
 const nj = $.nightOut(JAX, TUE);
 ok(!nj.tonight && nj.dow === 2, `a Tuesday (${TUE}) is built as that day, not tonight`);
 ok(nj.hh.rows.length > 0, `Jacksonville Tuesday: ${nj.hh.rows.length} happy hours within ${nj.hh.r} mi (${nj.hh.rows.slice(0, 3).map(r => r.p.n).join(', ')})`);
-ok(nj.hh.rows.every(r => !$.isClub(r.p) && r.sp.length && r.sp.every(e => $.isDrinkSp(e.x, r.p))), 'happy hours: drink specials only, never a club');
+ok(nj.hh.rows.every(r => r.sp.length && r.sp.every(e => $.isDrinkSp(e.x, r.p))), 'happy hours: drink specials only (clubs included, they are normal places now)');
 const starts = nj.hh.rows.map(r => r.sp[0].s ?? 1e4);
 ok(starts.every((s, i) => !i || s >= starts[i - 1]), 'another day: happy hours sorted by start time');
 ok(nj.clubs.rows.length > 0 && nj.clubs.rows.every(r => r.mi <= 30), `Jacksonville clubs within 30 mi: ${nj.clubs.rows.map(r => r.p.n).join(', ')}`);
@@ -73,7 +73,16 @@ const bs = $.daySpecials(bufClub, at(TUE, 13));
 ok($.isBuffetSp(bs[0].x) && bs[0].live && bs[1].soon && !$.isDrinkSp(bs[0].x, { c: 'social' }), 'a club lunch buffet is live at 1p and listed before the evening drink special');
 const club = Object.values($.P).find(p => $.isClub(p) && !p.sp?.length && !(p.bd?.r >= 4.5));
 const bar = Object.values($.P).find(p => $.BT.social.m(p) && !$.isClub(p) && !p.sp?.length);
-ok($.barBonus(club, at(MON, 20)) === -8 && $.barBonus(club, at(SUN, 20)) === -18, `Bar night auto-pick unchanged: a club is -8 on Monday, -18 on Sunday (${club.n})`);
-ok($.barBonus(bar, at(SUN, 20)) === $.barBonus(bar, at(MON, 20)) - 10, `Bar night auto-pick unchanged: Sunday costs a bar 10 (${bar.n})`);
+ok($.barBonus(club, at(MON, 20)) === 0 && $.barBonus(club, at(SUN, 20)) === -10, `a plain club scores like a plain bar for Bar night (${club.n}: 0 Monday, -10 Sunday)`);
+ok($.barBonus(bar, at(SUN, 20)) === $.barBonus(bar, at(MON, 20)) - 10, `Sunday still costs a bar 10 (${bar.n})`);
+// a club with a free lunch buffet is a normal lunch option while it's on, and sinks again once it's over
+const CLW = { lat: 27.965, lng: -82.8, t: Date.now() };
+const oz = $.P['clearwater-largo_oz-gentlemens-club'];
+const mealAt = h => $.rank('meal', { from: CLW, at: at(TUE, h), dur: 50 }).findIndex(r => r.p === oz);
+ok(oz && $.BT.meal.m(oz) && $.foodSpecials(oz).length > 0, `a club with a food special counts as a Meal option (${oz?.n}: ${$.foodSpecials(oz || {}).map(x => x.l).join(', ')})`);
+ok(mealAt(13) >= 0 && mealAt(13) < 12, `its free lunch buffet puts it in the lunch picks at 1p (rank ${mealAt(13) + 1})`);
+ok(mealAt(22) < 0 || mealAt(22) > 40, `at 10p, with the buffet over, it is not a lunch pick (rank ${mealAt(22) + 1 || 0})`);
+const hhClub = $.nightOut(CLW, TUE).hh.rows.filter(r => $.isClub(r.p));
+ok(hhClub.length > 0, `club drink specials show under Happy hours too (${hhClub.slice(0, 2).map(r => r.p.n).join(', ')})`);
 if (fails) { console.log(`\n${fails} night-out check(s) FAILED`); process.exit(1); }
 console.log('night out: all ok');

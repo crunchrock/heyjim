@@ -564,7 +564,7 @@ const TAG_LISTS = {
   ddd: [p => isGuy(p), "Guy's picks", 'Diners, Drive-ins and Dives spots near you'],
   crave: [p => p.tags.includes('crave') || p.tags.includes('quirky'), 'Cravings', 'Cult chains and quirky one-offs'],
   ladies: [p => (p.sp || []).some(x => /ladies/i.test(x.l || '')), "Ladies' nights", 'Which night, what the deal is, when it was posted'],
-  clubs: [p => isClub(p), 'Clubs', 'Gentlemen’s clubs: drink specials, free-entry windows'],
+  clubs: [p => isClub(p), 'Clubs', 'Lunch buffets, drink specials, free-entry windows'],
   tony: [p => isTony(p), "Tony's picks", 'Places Anthony Bourdain went on camera or recommended'],
   goth: [p => isGoth(p), 'Goth', 'Goth / darkwave / industrial bars, clubs and nights'],
 };
